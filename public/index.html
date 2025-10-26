@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VLAN-Rush V4</title>
+  <title>VLAN-Rush V4.1</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="theme-mix">
   <div id="join" class="card">
-    <div class="title">VLAN-Rush — IO Edition (V4)</div>
+    <div class="title">VLAN-Rush — IO Edition (V4.1)</div>
     <div class="row"><label>Name</label><input id="name" maxlength="16" placeholder="PC-Name oder Spitzname"></div>
     <div class="row"><label>Avatar</label>
       <select id="avatar">
@@ -18,11 +18,10 @@
       </select>
     </div>
     <div class="row"><button id="joinBtn">Beitreten</button><span id="status"></span></div>
-    <div class="hint">Kein Connect? → VLAN/Trunk prüfen.</div>
+    <div class="hint">Kein Connect? → VLAN/Trunk prüfen. HTTPS: <code>https://&lt;IP&gt;:3443/</code> bestätigen.</div>
   </div>
   <canvas id="game" width="1200" height="720"></canvas>
   <div id="scoreboard"></div>
-  <div class="hint" style="max-width:900px;margin:0 auto 16px;">HTTPS verfügbar unter <code>https://&lt;deine-ip&gt;:3443/</code> (Zertifikat bestätigen)</div>
   <script src="client.js"></script>
 </body>
 </html>

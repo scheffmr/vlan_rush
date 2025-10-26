@@ -1,7 +1,7 @@
 {
   "name": "vlan-rush-io",
-  "version": "4.0.0",
-  "description": "Realtime browser IO-style game for VLAN labs (stable, HTTPS).",
+  "version": "4.1.0",
+  "description": "Realtime browser IO-style game for VLAN labs (stable HTTPS).",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

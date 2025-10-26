@@ -1,20 +1,15 @@
 
-# VLAN-Rush V4 — IO Edition (stable)
+# VLAN-Rush V4.1 — IO Edition
 
-- Continuous play, no rounds
-- Slither rule: hitting any trail or the wall = death (respawn after 1.5s, score reset)
-- Avatars: Cat 🐱, Robot 🤖, Packet 📦
-- Trail grows **longer with each point** and **thicker by +1px per 5 points**
-- Admin: Reset map/players
-- Spectator removed
-- HTTP + HTTPS (self-signed); WSS auto when using HTTPS
+Fixes:
+- Avatar-Auswahl übernommen (Cat/Robot/Packet)
+- Orbs verschwinden zuverlässig (Server sendet komplette Liste)
+- Einheitliche Kreis-Hitbox (12px) für alle Avatare
+- Trail wächst länger (+6/Point) & dicker (+1px/5 Points)
+- HTTPS (self-signed), WSS automatisch
+- Spectator entfernt
 
-## Start
-Windows: `start_server.bat`  
-Linux/macOS: `./start_server.sh`
-
-Open:  
-- HTTP → `http://<your-ip>:3000/`  
-- HTTPS → `https://<your-ip>:3443/` (accept warning)
-
-Admin: `/admin.html`
+Start: `start_server.bat` (Windows) oder `./start_server.sh` (Linux/macOS)
+HTTP:  http://<IP>:3000/
+HTTPS: https://<IP>:3443/  (Warnung bestätigen)
+Admin: /admin.html  (Reset)
