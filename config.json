@@ -1,8 +1,8 @@
 {
-  "port": 3000,
+  "port_http": 3000,
+  "port_https": 3443,
+  "mapSize": 2000,
+  "orbCount": 150,
   "maxPlayers": 20,
-  "mapSize": 1800,
-  "orbCount": 120,
-  "tickRate": 30,
   "respawnDelayMs": 1500
 }
