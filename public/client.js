@@ -326,7 +326,20 @@ function headRadius(p){
 }
 
 function renderScoreboard(){
-  const list = Array.from(players.values()).sort((a,b)=> b.score - a.score).slice(0,10);
-  sb.innerHTML = list.map(p=> `<div class="scoreitem"><span class="name">${esc(p.name)}</span><span>${Math.floor(p.score)}</span></div>`).join('');
+   if (!sb) return;
+  const list = Array.from(players.values())
+    .sort((a,b)=> b.score - a.score)
+    .slice(0,10);
+
+  if (!list.length){
+    sb.innerHTML = `<div class="score-title">Punkte</div><div class="score-empty">Noch keine Spieler aktiv</div>`;
+    return;
+  }
+
+  const rows = list.map((p,idx)=>
+    `<div class="scoreitem"><span class="name">${idx+1}. ${esc(p.name)}</span><span class="points">${Math.floor(p.score)}</span></div>`
+  ).join('');
+
+  sb.innerHTML = `<div class="score-title">Punkte</div>${rows}`;
 }
 function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }

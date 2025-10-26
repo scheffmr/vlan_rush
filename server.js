@@ -233,7 +233,8 @@ function die(p){
   broadcast({type:'death', id:p.id});
 
   // ✅ Bonus orb logic
-  const bonusCount = Math.min(5, Math.floor(p.score / 10));
+  //const bonusCount = Math.min(5, Math.floor(p.score / 10));
+  const bonusCount = Math.floor(p.score / 6);
   for (let i = 0; i < bonusCount; i++) {
     const a = Math.random() * Math.PI * 2;
     const d = 25 + Math.random() * 30;
