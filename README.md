@@ -1,21 +1,30 @@
+# VLAN-Rush
 
-# VLAN-Rush V4.3 — IO Edition
+VLAN-Rush ist ein leichtgewichtiges, LAN-basiertes Multiplayer-Browserspiel für Netzwerk-Labore.
 
-**What's new**
-- Emoji Avatars (real emoji rendering) — random on join
-- Name = client IP (auto), PC-Name optional later
-- Self-collision only if trail is in **forward cone** (default 120°)
-- Respawn invulnerability ~0.3s
-- Boost temporarily shrinks visual trail length (recovers when boost stops)
-- Pickup/Death sounds (WebAudio; no files needed)
-- Scoreboard page `/score.html` for projector
-- No spectator, no pre-join UI
+Schüler*innen verbinden ihre echten PCs und Switches im VLAN, konfigurieren Trunks – und sobald die Konfiguration korrekt ist, joinen sie automatisch ins Spiel.
 
-**Start**
-- Windows: `start_server.bat`
-- Linux/macOS: `./start_server.sh`
-Open:
-- HTTP → `http://<IP>:3000/`
-- HTTPS → `https://<IP>:3443/` (accept cert warning)
-Admin reset: `/admin.html`
-Scoreboard: `/score.html`
+## Features
+- Realtime Multiplayer (bis zu 20 Spieler)
+- Emoji-Schlangen, die durch Orb-Sammeln wachsen
+- Boost-Mechanik
+- Respawn mit Bonuspunkten
+- Scoreboard Overlay
+- Keine Installation auf Clients erforderlich (Browser genügt)
+
+## Einsatz im Unterricht
+- Fördert VLAN- und Trunk-Konfiguration (z. B. Cisco 2960)
+- Praktisches Lernerlebnis durch Motivation
+
+## Start
+```
+npm install
+npm start
+```
+Dann Spiel erreichen unter:
+```
+http://<Server-IP>:3000
+```
+
+## Lizenz
+MIT — siehe LICENSE
