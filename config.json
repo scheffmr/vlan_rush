@@ -1,0 +1,9 @@
+{
+  "port": 3000,
+  "maxPlayers": 20,
+  "round": {
+    "scoreLimit": 50,
+    "timeLimitSec": 300,
+    "mapSize": 1600
+  }
+}

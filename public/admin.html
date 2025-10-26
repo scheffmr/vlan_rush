@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LAN Rush — Admin</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="theme-mix">
+  <div class="title">LAN Rush — Admin Panel</div>
+  <div class="panel">
+    <div class="row">
+      <label>Modus:</label>
+      <select id="mode">
+        <option value="collect">Sammeln</option>
+        <option value="ctf">Capture the Flag</option>
+        <option value="king">King of the Switch</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>Punktelimit:</label>
+      <input type="number" id="scoreLimit" value="50" min="1" max="999">
+    </div>
+    <div class="row">
+      <label>Zeitlimit (Sek):</label>
+      <input type="number" id="timeLimitSec" value="300" min="0" max="3600">
+      <span class="hint">0 = kein Zeitlimit</span>
+    </div>
+    <div class="row">
+      <button id="apply">Anwenden</button>
+      <button id="start">Runde starten</button>
+      <button id="stop">Runde stoppen</button>
+    </div>
+  </div>
+  <script>
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+    ws.onopen = ()=>{};
+    ws.onmessage = (ev)=>{
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'roundLimits'){
+        document.getElementById('scoreLimit').value = msg.scoreLimit;
+        document.getElementById('timeLimitSec').value = msg.timeLimitSec;
+      } else if (msg.type === 'mode'){
+        document.getElementById('mode').value = msg.mode;
+      }
+    };
+    document.getElementById('apply').onclick = ()=>{
+      ws.send(JSON.stringify({type:'admin', action:'setMode', mode: document.getElementById('mode').value}));
+      ws.send(JSON.stringify({type:'admin', action:'setLimits',
+        scoreLimit: Number(document.getElementById('scoreLimit').value),
+        timeLimitSec: Number(document.getElementById('timeLimitSec').value)
+      }));
+    };
+    document.getElementById('start').onclick = ()=> ws.send(JSON.stringify({type:'admin', action:'startRound'}));
+    document.getElementById('stop').onclick = ()=> ws.send(JSON.stringify({type:'admin', action:'stopRound'}));
+  </script>
+</body>
+</html>

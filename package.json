@@ -1,0 +1,11 @@
+{
+  "name": "lan-rush-vlan-edition",
+  "version": "1.0.0",
+  "description": "Realtime browser multiplayer game for VLAN/Trunk classroom labs. No external deps.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "author": "",
+  "license": "MIT"
+}
