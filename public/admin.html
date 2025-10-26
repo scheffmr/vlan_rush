@@ -3,16 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VLAN-Rush V2 — Admin</title>
+  <title>VLAN-Rush — Admin</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="theme-mix">
   <div class="title">Admin</div>
   <div class="card">
-    <div class="row">
-      <button id="reset">Map/Spiel zurücksetzen</button>
-    </div>
-    <div class="hint">Nur lokal im Lab gedacht – keine Auth nötig.</div>
+    <div class="row"><button id="reset">Map/Spiel zurücksetzen</button></div>
+    <div class="hint">Offline-Lab: keine Auth, nur lokal verwenden.</div>
   </div>
   <script>
     const ws = new WebSocket((location.protocol==='https:'?'wss://':'ws://') + location.host);
