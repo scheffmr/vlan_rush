@@ -35,7 +35,7 @@ function d2xy(ax,ay,bx,by){ const dx=ax-bx, dy=ay-by; return dx*dx+dy*dy; }
 function cleanIP(remoteAddress){
   if (!remoteAddress) return '0.0.0.0';
   // strip IPv6 prefix like ::ffff:
-  const m = remoteAddress.match(/(?:\\d+\\.){3}\\d+/);
+  const m = remoteAddress.match(/(?:\d+\.){3}\d+/);
   return m ? m[0] : remoteAddress;
 }
 function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
