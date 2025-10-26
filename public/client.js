@@ -46,33 +46,56 @@ function send(o){ if(ws && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringif
 
 function onMessage(ev){
   const msg = JSON.parse(ev.data);
-  if (msg.type === 'hello' || msg.type === 'welcome') {
-	  if (msg.wBase !== undefined) wBase = msg.wBase;
-	  if (msg.wGrow !== undefined) wGrow = msg.wGrow;
-	  if (msg.lBase !== undefined) lBase = msg.lBase;
-	  if (msg.lGrow !== undefined) lGrow = msg.lGrow;
-	  if (msg.selfKill !== undefined) selfKill = msg.selfKill;
-	} 
-  if (msg.type==='hello'){
-    mapSize = msg.mapSize; orbs = msg.orbs || [];
-  } else if (msg.type==='welcome'){
-    myId = msg.id; mapSize = msg.mapSize; orbs = msg.orbs || [];
+
+  if (msg.type === 'hello'){
+    mapSize = msg.mapSize;
+    orbs = msg.orbs || [];
+    // Config vom Server übernehmen (nur Anzeige/Render)
+    if (msg.config){
+      if (typeof msg.config.wBase === 'number') wBase = msg.config.wBase;
+      if (typeof msg.config.wGrow === 'number') wGrow = msg.config.wGrow;
+      if (typeof msg.config.lBase === 'number') lBase = msg.config.lBase;
+      if (typeof msg.config.lGrow === 'number') lGrow = msg.config.lGrow;
+      if (typeof msg.config.selfKill === 'number') selfKill = msg.config.selfKill;
+      if (msg.config.version) console.log('VLAN-RUSH client synced with server:', msg.config.version);
+    }
+
+  } else if (msg.type === 'welcome'){
+    myId = msg.id;
+    mapSize = msg.mapSize;
+    orbs = msg.orbs || [];
     players.clear();
     msg.players.forEach(p=> players.set(p.id, {...p, trail:[]}));
-  } else if (msg.type==='spawn'){
+    if (msg.config){
+      if (typeof msg.config.wBase === 'number') wBase = msg.config.wBase;
+      if (typeof msg.config.wGrow === 'number') wGrow = msg.config.wGrow;
+      if (typeof msg.config.lBase === 'number') lBase = msg.config.lBase;
+      if (typeof msg.config.lGrow === 'number') lGrow = msg.config.lGrow;
+      if (typeof msg.config.selfKill === 'number') selfKill = msg.config.selfKill;
+      if (msg.config.version) console.log('VLAN-RUSH client synced with server:', msg.config.version);
+    }
+
+  } else if (msg.type === 'spawn'){
     players.set(msg.player.id, {...msg.player, trail: []});
-  } else if (msg.type==='despawn'){
+
+  } else if (msg.type === 'despawn'){
     players.delete(msg.id);
-  } else if (msg.type==='death'){
-    const p=players.get(msg.id); if (p){ p.alive=false; p.trail.length=0; if (p.id===myId) playBeep(200,0.12,'sawtooth'); }
-  } else if (msg.type==='orbs'){
+
+  } else if (msg.type === 'death'){
+    const p = players.get(msg.id);
+    if (p){ p.alive=false; p.trail.length=0; if (p.id===myId) playBeep(200,0.12,'sawtooth'); }
+
+  } else if (msg.type === 'orbs'){
     orbs = msg.orbs || [];
-    const p = players.get(msg.id); if (p){ p.score = msg.score; if (p.id===myId) playBeep(880,0.06,'square'); }
-  } else if (msg.type==='reset'){
+    const p = players.get(msg.id);
+    if (p){ p.score = msg.score; if (p.id===myId) playBeep(880,0.06,'square'); }
+
+  } else if (msg.type === 'reset'){
     players.clear();
     msg.players.forEach(p=> players.set(p.id, {...p, trail:[]}));
     orbs = msg.orbs || [];
-  } else if (msg.type==='state'){
+
+  } else if (msg.type === 'state'){
     msg.players.forEach(s=>{
       let p = players.get(s.id);
       if (!p){
@@ -81,16 +104,15 @@ function onMessage(ev){
       }
       if (s.alive){
         p.trail.push({x:s.x, y:s.y, t:performance.now(), score:s.score});
-        const keep = trailKeep(s.score, 0); // identisch zur Server-Logik
-		if (p.trail.length > keep) {
-			p.trail.splice(0, p.trail.length - keep);
-		}
+        const keep = trailKeep(s.score); // <— wichtig: selbe Formel wie Server
+        if (p.trail.length > keep) p.trail.splice(0, p.trail.length - keep);
       }
-	  p.boosting = !!s.boosting;
+      p.boosting = !!s.boosting;
       p.x=s.x; p.y=s.y; p.score=s.score; p.alive=s.alive; p.avatar=s.avatar; p.name=s.name;
     });
   }
 }
+
 
 // input
 const keys = {};
@@ -224,12 +246,8 @@ function drawHead(p, cam){
   ctx.fillText(`${p.name} (${Math.floor(p.score)})`, x, y-18);
 }
 
-function trailWidth(score){
-  return wBase + Math.floor(score * wGrow);
-}
-function trailKeep(score){
-  return lBase + score * lGrow;
-}
+function trailWidth(score){ return wBase + Math.floor(score * wGrow); }
+function trailKeep(score){ return Math.max(lBase, lBase + score * lGrow); }
 
 function headRadius(p){
  return trailWidth(p.score) / 2;; // gleiche Logik wie trailWidth

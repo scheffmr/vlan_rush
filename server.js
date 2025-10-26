@@ -82,11 +82,12 @@ for (const server of [httpServer, httpsServer]){
 	  type:'hello',
 	  mapSize: MAP_SIZE,
 	  orbs: state.orbs,
-	  wBase: cfg.trailWidthBase,
-	  wGrow: cfg.trailWidthGrowth,
-	  lBase: cfg.trailLengthBase,
-	  lGrow: cfg.trailLengthGrowth,
-	  selfKill: cfg.selfHeadKillPercent
+	  config: {
+		wBase: cfg.trailWidthBase, wGrow: cfg.trailWidthGrowth,
+		lBase: cfg.trailLengthBase, lGrow: cfg.trailLengthGrowth,
+		selfKill: cfg.selfHeadKillPercent,
+		version: '4.7'
+	  }
 	}));
     socket.on('data', buf=> handleWS(socket, buf, ip));
     socket.on('close', ()=> cleanup(socket));
@@ -165,14 +166,15 @@ function handleWS(socket, buffer, ip){
     sendWS(socket, JSON.stringify({
 	  type:'welcome',
 	  id,
-	  mapSize: MAP_SIZE, 
-	  players: Array.from(state.players.values()).map(slim), 
+	  mapSize: MAP_SIZE,
+	  players: Array.from(state.players.values()).map(slim),
 	  orbs: state.orbs,
-	  wBase: cfg.trailWidthBase,
-	  wGrow: cfg.trailWidthGrowth,
-	  lBase: cfg.trailLengthBase,
-	  lGrow: cfg.trailLengthGrowth,
-	  selfKill: cfg.selfHeadKillPercent
+	  config: {
+		wBase: cfg.trailWidthBase, wGrow: cfg.trailWidthGrowth,
+		lBase: cfg.trailLengthBase, lGrow: cfg.trailLengthGrowth,
+		selfKill: cfg.selfHeadKillPercent,
+		version: '4.7'
+	  }
 	}));
     broadcast({type:'spawn', player: slim(p)});
   }
@@ -220,16 +222,15 @@ function die(p){
 
 // Trail helpers
 function trailKeep(score, penalty){
-  const base = cfg.trailLengthBase || 30;
-  const grow = cfg.trailLengthGrowth || 3;
+  const base = (cfg.trailLengthBase ?? 30);
+  const grow = (cfg.trailLengthGrowth ?? 3);
   return Math.max(base, base + score * grow - (penalty || 0));
 }
 function trailWidth(score){
-  const base = cfg.trailWidthBase || 6;
-  const grow = cfg.trailWidthGrowth || 0.03;
+  const base = (cfg.trailWidthBase ?? 6);
+  const grow = (cfg.trailWidthGrowth ?? 0.03);
   return base + Math.floor(score * grow);
 }
-
 // Angle helpers
 function angleBetween(ax,ay,bx,by,dir){
   const vx = bx-ax, vy = by-ay;
@@ -283,37 +284,27 @@ setInterval(()=>{
     if (changed){ broadcast({type:'orbs', orbs: state.orbs, id:p.id, score:p.score}); }
   }
 
-  // collisions
-  for (const a of state.players.values()){
-    if (!a.alive) continue;
-    const headx=a.x, heady=a.y;
-    if (t < a.invulnUntil) continue;
+// collisions
+for (const a of state.players.values()){
+  if (!a.alive) continue;
+  const headx = a.x, heady = a.y;
+  if (t < a.invulnUntil) continue;
 
-    // self collision only in forward cone + skip last few points
-    if (a.trail.length>12){
-      for (let i=0;i<a.trail.length-12;i+=3){
-        const pt = a.trail[i];
-        const ang = angleBetween(headx, heady, pt.x, pt.y, a.dir);
-        const killDist = trailWidth(a.score) * (cfg.selfHeadKillPercent || 0.85);
-		if (ang <= SELF_CONE_DEG/2 &&
-			d2xy(headx, heady, pt.x, pt.y) < killDist * killDist) {
-		  die(a); 
-		  break;
-		}
-      }
-      if (!a.alive) continue;
+  // SELF-COLLISION DISABLED: Spieler dürfen die eigene Spur kreuzen
+  // (kein Code für self-hit)
+
+  // other players: hit if head touches any segment of others (sum of radii)
+  for (const b of state.players.values()){
+    if (a.id === b.id) continue;
+    const rad = trailWidth(a.score)/2 + trailWidth(b.score)/2;
+    const r2  = rad * rad;
+    for (let i=0;i<b.trail.length;i+=3){
+      const pt = b.trail[i];
+      if (d2xy(headx, heady, pt.x, pt.y) < r2){ die(a); break; }
     }
-    // other players: any direction
-    for (const b of state.players.values()){
-      if (a.id===b.id) continue;
-      const rad = trailWidth(a.score)/2 + trailWidth(b.score)/2;
-      for (let i=0;i<b.trail.length;i+=3){
-        const pt = b.trail[i];
-        if (d2xy(headx,heady,pt.x,pt.y) < rad*rad){ die(a); break; }
-      }
-      if (!a.alive) break;
-    }
+    if (!a.alive) break;
   }
+}
 
   // snapshot
 	const snap = [];
@@ -336,5 +327,6 @@ setInterval(()=>{
 // Heartbeat
 setInterval(()=>{ for (const s of clients){ try{ const ping=Buffer.from([0x89,0x00]); s.write(ping); }catch(e){} } }, 15000);
 
-httpServer.listen(HTTP_PORT,'0.0.0.0', ()=> console.log(`[VLAN-RUSH V4.3] HTTP on ${HTTP_PORT}`));
-httpsServer.listen(HTTPS_PORT,'0.0.0.0', ()=> console.log(`[VLAN-RUSH V4.3] HTTPS on ${HTTPS_PORT}`));
+httpServer.listen(HTTP_PORT,'0.0.0.0', ()=> console.log(`[VLAN-RUSH V4.7] HTTP on ${HTTP_PORT}`));
+httpsServer.listen(HTTPS_PORT,'0.0.0.0', ()=> console.log(`[VLAN-RUSH V4.7] HTTPS on ${HTTPS_PORT}`));
+
