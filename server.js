@@ -1,5 +1,5 @@
 
-// VLAN-Rush V4.1 — stable with HTTPS, avatar/orb fixes, circle hitbox
+// VLAN-Rush V4.3 — Emoji avatars, scoreboard, HTTPS
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
@@ -15,6 +15,12 @@ const ORB_COUNT = cfg.orbCount || 160;
 const TICKRATE = cfg.tickRate || 30;
 const RESPAWN_DELAY = cfg.respawnDelayMs || 1500;
 const HIT_R = cfg.hitRadius || 12;
+const SELF_CONE_DEG = cfg.selfCollisionForwardDeg || 120;
+const INVULN_MS = cfg.respawnInvulnMs || 300;
+const BOOST_PEN_PER_S = cfg.boostPenaltyPerSec || 18;
+const BOOST_REC_PER_S = cfg.boostRecoveryPerSec || 12;
+
+const EMOJIS = ['🐱','🤖','📦','🖧','💻','🐶','🐭','🚀','🐸','😎'];
 
 const MIME = {
   '.html':'text/html; charset=utf-8','.js':'application/javascript; charset=utf-8',
@@ -25,12 +31,18 @@ const state = { players: new Map(), sockets: new Map(), orbs: [] };
 
 function rand(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
 function now(){ return Date.now(); }
-function d2(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return dx*dx+dy*dy; }
+function d2xy(ax,ay,bx,by){ const dx=ax-bx, dy=ay-by; return dx*dx+dy*dy; }
+function cleanIP(remoteAddress){
+  if (!remoteAddress) return '0.0.0.0';
+  // strip IPv6 prefix like ::ffff:
+  const m = remoteAddress.match(/(?:\\d+\\.){3}\\d+/);
+  return m ? m[0] : remoteAddress;
+}
 
 function spawnOrbs(n){ for(let i=0;i<n;i++){ state.orbs.push({x:rand(40,MAP_SIZE-40),y:rand(40,MAP_SIZE-40)}); } }
 spawnOrbs(ORB_COUNT);
 
-// Static
+// Static routing
 function sendFile(res, fp){
   fs.readFile(fp,(err,data)=>{
     if(err){ res.writeHead(404).end('Not found'); return; }
@@ -65,8 +77,9 @@ for (const server of [httpServer, httpsServer]){
     ].join('\r\n'));
     socket.isAlive = true; socket.on('pong',()=> socket.isAlive=true);
     clients.add(socket);
+    const ip = cleanIP(req.socket.remoteAddress);
     sendWS(socket, JSON.stringify({type:'hello', mapSize: MAP_SIZE, orbs: state.orbs}));
-    socket.on('data', buf=> handleWS(socket, buf));
+    socket.on('data', buf=> handleWS(socket, buf, ip));
     socket.on('close', ()=> cleanup(socket));
     socket.on('end', ()=> cleanup(socket));
     socket.on('error', ()=> cleanup(socket));
@@ -98,23 +111,24 @@ function parseWS(buf){
   return {op, text: payload.toString('utf8')};
 }
 
-function handleWS(socket, buffer){
+function handleWS(socket, buffer, ip){
   const fr = parseWS(buffer);
   if (fr.op===0x8){ cleanup(socket); return; }
   if (fr.op!==0x1) return;
   let msg; try{ msg = JSON.parse(fr.text); }catch(e){ return; }
 
-  if (msg.type==='join'){
+  if (msg.type==='join' || msg.type==='auto'){
     if (state.players.size>=MAX_PLAYERS){ sendWS(socket, JSON.stringify({type:'reject',reason:'full'})); return; }
     const id = crypto.randomBytes(4).toString('hex');
-    const name = (msg.name||'Player').slice(0,16);
-    const avatar = ['cat','robot','packet'].includes(msg.avatar) ? msg.avatar : 'packet';
+    const host = (msg.host || "").trim();
+    const name = host ? `${host} (${ip})` : ip;
+    const avatar = EMOJIS[rand(0, EMOJIS.length-1)];
     const p = {
-      id, name, avatar,
+      id, name, avatar, ip,
       x: rand(60, MAP_SIZE-60), y: rand(60, MAP_SIZE-60),
       dir: Math.random()*Math.PI*2, spd: 2.4,
       score: 0, alive: true, deadUntil: 0,
-      trail: []
+      trail: [], invulnUntil: 0, boostPenalty: 0
     };
     state.players.set(id, p);
     state.sockets.set(socket, id);
@@ -126,6 +140,7 @@ function handleWS(socket, buffer){
     const p = state.players.get(id); if (!p) return;
     if (typeof msg.dir==='number') p.dir = msg.dir;
     if (typeof msg.boost==='boolean') p.spd = msg.boost ? 3.2 : 2.4;
+    p.boosting = !!msg.boost;
   }
   else if (msg.type==='admin' && msg.action==='reset'){
     state.orbs = []; spawnOrbs(ORB_COUNT);
@@ -134,16 +149,27 @@ function handleWS(socket, buffer){
   }
 }
 
-function slim(p){ return {id:p.id,name:p.name,avatar:p.avatar,x:p.x,y:p.y,score:p.score,alive:p.alive}; }
+function slim(p){ return {id:p.id,name:p.name,avatar:p.avatar,x:p.x,y:p.y,score:p.score,alive:p.alive,ip:p.ip}; }
 function respawn(p){
   p.x = rand(60, MAP_SIZE-60); p.y = rand(60, MAP_SIZE-60);
-  p.dir = Math.random()*Math.PI*2; p.spd = 2.4; p.score = 0; p.trail.length = 0; p.alive = true; p.deadUntil = 0;
+  p.dir = Math.random()*Math.PI*2; p.spd = 2.4; p.score = 0; p.trail.length = 0; p.alive = true;
+  p.deadUntil = 0; p.invulnUntil = now() + (cfg.respawnInvulnMs || 300);
+  p.boostPenalty = 0;
 }
 function die(p){ if (!p.alive) return; p.alive=false; p.deadUntil = now()+RESPAWN_DELAY; broadcast({type:'death', id:p.id}); }
 
-// Growth helpers
-function trailKeep(score){ return 120 + score*6; }
+// Trail helpers
+function trailKeep(score, penalty){ return Math.max(30, 30 + score*2 - (penalty||0)); }
 function trailWidth(score){ return 6 + Math.floor(score/5); }
+
+// Angle helpers
+function angleBetween(ax,ay,bx,by,dir){
+  const vx = bx-ax, vy = by-ay;
+  let a = Math.atan2(vy, vx) - dir;
+  while (a > Math.PI) a -= 2*Math.PI;
+  while (a < -Math.PI) a += 2*Math.PI;
+  return Math.abs(a) * 180/Math.PI; // degrees
+}
 
 setInterval(()=>{
   const t = now();
@@ -152,75 +178,90 @@ setInterval(()=>{
       if (t>=p.deadUntil){ respawn(p); broadcast({type:'spawn', player: slim(p)}); }
       continue;
     }
+    // movement
     p.x += Math.cos(p.dir)*p.spd;
     p.y += Math.sin(p.dir)*p.spd;
 
+    // boost penalty (temporary)
+    if (p.boosting){ p.score = Math.max(0, p.score - 0.03); }
+
     // walls
-    if (p.x<HIT_R || p.y<HIT_R || p.x>MAP_SIZE-HIT_R || p.y>MAP_SIZE-HIT_R){ die(p); continue; }
+    if (p.x<HIT_R || p.y<HIT_R || p.x>MAP_SIZE-HIT_R || p.y>MAP_SIZE-HIT_R){
+      if (t >= p.invulnUntil) die(p);
+      continue;
+    }
 
     // trail
     p.trail.push({x:p.x,y:p.y,t});
-    const need = Math.floor(trailKeep(p.score));
+    const need = Math.floor(trailKeep(p.score, p.boostPenalty));
     if (p.trail.length>need) p.trail.splice(0, p.trail.length-need);
 
     // orbs collect
     let changed = false;
     for (let i=state.orbs.length-1;i>=0;i--){
       const o = state.orbs[i];
-      if (d2(p,o) < (HIT_R+6)*(HIT_R+6)){
+      if (d2xy(p.x,p.y,o.x,o.y) < (HIT_R+6)*(HIT_R+6)){
         state.orbs.splice(i,1);
         changed = true;
         p.score += 1;
       }
     }
-    // respawn missing orbs
-    while (state.orbs.length < ORB_COUNT){
-      state.orbs.push({x:rand(40,MAP_SIZE-40),y:rand(40,MAP_SIZE-40)});
-      changed = true;
-    }
-    if (changed){
-      // send full orblist + updated score of this player
-      broadcast({type:'orbs', orbs: state.orbs, id:p.id, score:p.score});
-    }
+    while (state.orbs.length < ORB_COUNT){ state.orbs.push({x:rand(40,MAP_SIZE-40),y:rand(40,MAP_SIZE-40)}); changed = true; }
+    if (changed){ broadcast({type:'orbs', orbs: state.orbs, id:p.id, score:p.score}); }
+	if(state.players.size > 0){
+	  broadcast({type:'state', players: Array.from(state.players.values()).map(slim)});
+	}
   }
 
-  // Collisions: circle head vs trails (self + others)
+  // collisions
   for (const a of state.players.values()){
     if (!a.alive) continue;
-    const head = {x:a.x, y:a.y};
-    // self: ignore last 12 points
+    const headx=a.x, heady=a.y;
+    if (t < a.invulnUntil) continue;
+
+    // self collision only in forward cone + skip last few points
     if (a.trail.length>12){
       for (let i=0;i<a.trail.length-12;i+=3){
         const pt = a.trail[i];
-        const rad = HIT_R; // vs thin trail (use width based on own score? here only trail width matters)
-        if (d2(head, pt) < (rad + trailWidth(a.score)/2)**2){ die(a); break; }
+        const ang = angleBetween(headx, heady, pt.x, pt.y, a.dir);
+        if (ang <= SELF_CONE_DEG/2){
+          if (d2xy(headx,heady,pt.x,pt.y) < (HIT_R + trailWidth(a.score)/2)**2){ die(a); break; }
+        }
       }
       if (!a.alive) continue;
     }
-    // others
+    // other players: any direction
     for (const b of state.players.values()){
       if (a.id===b.id) continue;
       const rad = HIT_R + trailWidth(b.score)/2;
       for (let i=0;i<b.trail.length;i+=3){
         const pt = b.trail[i];
-        if (d2(head, pt) < rad*rad){ die(a); break; }
+        if (d2xy(headx,heady,pt.x,pt.y) < rad*rad){ die(a); break; }
       }
       if (!a.alive) break;
     }
   }
 
-  // snapshot (positions+avatars)
-  const snap = [];
-  for (const p of state.players.values()){
-    snap.push({id:p.id,x:p.x,y:p.y,score:p.score,alive:p.alive,avatar:p.avatar});
-  }
-  broadcast({type:'state', players: snap});
+  // snapshot
+	const snap = [];
+	for (const p of state.players.values()){
+		snap.push({
+			id: p.id,
+			x: p.x,
+			y: p.y,
+			score: p.score,
+			alive: p.alive,
+			avatar: p.avatar,
+			name: p.name,
+			ip: p.ip,
+			boosting: p.boosting   // ✅ Boost-Flag übertragen
+		});
+	}
+	broadcast({ type:'state', players: snap });
 }, 1000/TICKRATE);
 
-// Heartbeat ping
-setInterval(()=>{
-  for (const s of clients){ try{ const ping = Buffer.from([0x89,0x00]); s.write(ping); }catch(e){} }
-}, 15000);
+// Heartbeat
+setInterval(()=>{ for (const s of clients){ try{ const ping=Buffer.from([0x89,0x00]); s.write(ping); }catch(e){} } }, 15000);
 
-httpServer.listen(HTTP_PORT,'0.0.0.0', ()=> console.log(`[VLAN-RUSH V4.1] HTTP on ${HTTP_PORT}`));
-httpsServer.listen(HTTPS_PORT,'0.0.0.0', ()=> console.log(`[VLAN-RUSH V4.1] HTTPS on ${HTTPS_PORT}`));
+httpServer.listen(HTTP_PORT,'0.0.0.0', ()=> console.log(`[VLAN-RUSH V4.3] HTTP on ${HTTP_PORT}`));
+httpsServer.listen(HTTPS_PORT,'0.0.0.0', ()=> console.log(`[VLAN-RUSH V4.3] HTTPS on ${HTTPS_PORT}`));

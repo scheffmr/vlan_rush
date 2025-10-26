@@ -1,33 +1,40 @@
-// VLAN-Rush V4.1 client
+// VLAN-Rush V4.3 client
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const sb = document.getElementById('scoreboard');
-const HIT_R = 12;
 
 let ws, myId=null, mapSize=2000;
 const players = new Map(); // id -> {id,name,avatar,x,y,score,alive,trail:[]}
 let orbs = [];
+let pulse = 0;
 
-// UI
-const joinBox = document.getElementById('join');
-const statusEl = document.getElementById('status');
-document.getElementById('joinBtn').onclick = ()=>{
-  connectWS(()=>{
-    const name = document.getElementById('name').value || `Player${Math.floor(Math.random()*1000)}`;
-    const avatar = document.getElementById('avatar').value || 'packet';
-    send({type:'join', name, avatar});
-  });
-};
+// WebAudio simple sounds
+let audioCtx;
+function playBeep(freq=440, dur=0.08, type='sine'){
+  try{
+    if (!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type; o.frequency.value = freq;
+    o.connect(g); g.connect(audioCtx.destination);
+    g.gain.setValueAtTime(0.15, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+    o.start(); o.stop(audioCtx.currentTime + dur);
+  }catch(e){}
+}
+
+// Connect immediately (auto-join with random avatar handled server-side)
+const host = location.hostname || "Unbekannt";
+connectWS(()=> send({type:'auto', host}));
 
 function connectWS(onOpen){
   const url = (location.protocol==='https:'?'wss://':'ws://') + location.host;
   ws = new WebSocket(url);
-  ws.onopen = ()=>{ status('verbunden'); if (onOpen) onOpen(); };
-  ws.onclose = ()=>{ status('getrennt — VLAN/Trunk prüfen'); setTimeout(()=> connectWS(()=>{ if (myId && players.get(myId)) send({type:'join', name: players.get(myId).name, avatar: players.get(myId).avatar}); }), 1000); };
-  ws.onerror = ()=> status('WS-Fehler');
+  ws.onopen = ()=>{ if (onOpen) onOpen(); };
+  ws.onclose = ()=>{ setTimeout(()=> connectWS(()=>{ if (myId && players.get(myId)) send({type:'auto'}); }), 1000); };
+  ws.onerror = ()=> {};
   ws.onmessage = onMessage;
 }
-function status(t){ if(statusEl) statusEl.textContent = t; }
 function send(o){ if(ws && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify(o)); }
 
 function onMessage(ev){
@@ -38,17 +45,15 @@ function onMessage(ev){
     myId = msg.id; mapSize = msg.mapSize; orbs = msg.orbs || [];
     players.clear();
     msg.players.forEach(p=> players.set(p.id, {...p, trail:[]}));
-    if (joinBox) joinBox.style.display='none';
   } else if (msg.type==='spawn'){
     players.set(msg.player.id, {...msg.player, trail: []});
   } else if (msg.type==='despawn'){
     players.delete(msg.id);
   } else if (msg.type==='death'){
-    const p=players.get(msg.id); if (p){ p.alive=false; p.trail.length=0; }
+    const p=players.get(msg.id); if (p){ p.alive=false; p.trail.length=0; if (p.id===myId) playBeep(200,0.12,'sawtooth'); }
   } else if (msg.type==='orbs'){
-    // Full orblist from server; ensure local view matches exactly
     orbs = msg.orbs || [];
-    const p = players.get(msg.id); if (p) p.score = msg.score;
+    const p = players.get(msg.id); if (p){ p.score = msg.score; if (p.id===myId) playBeep(880,0.06,'square'); }
   } else if (msg.type==='reset'){
     players.clear();
     msg.players.forEach(p=> players.set(p.id, {...p, trail:[]}));
@@ -57,16 +62,16 @@ function onMessage(ev){
     msg.players.forEach(s=>{
       let p = players.get(s.id);
       if (!p){
-        p = {id:s.id,name:s.name||('P'+s.id),avatar:s.avatar||'packet',x:s.x,y:s.y,score:s.score,alive:s.alive,trail:[]};
+        p = {id:s.id,name:s.name,avatar:s.avatar,x:s.x,y:s.y,score:s.score,alive:s.alive,trail:[]};
         players.set(s.id,p);
       }
       if (s.alive){
         p.trail.push({x:s.x, y:s.y, t:performance.now(), score:s.score});
-        const keep = 120 + s.score*6;
+        const keep = 30 + s.score;
         if (p.trail.length>keep) p.trail.splice(0, p.trail.length-keep);
       }
-      // Never override chosen avatar arbitrarily; always trust server state
-      p.x=s.x; p.y=s.y; p.score=s.score; p.alive=s.alive; p.avatar=s.avatar;
+	  p.boosting = !!s.boosting;
+      p.x=s.x; p.y=s.y; p.score=s.score; p.alive=s.alive; p.avatar=s.avatar; p.name=s.name;
     });
   }
 }
@@ -89,7 +94,6 @@ window.addEventListener('mousemove', e=>{
 let last = performance.now();
 function loop(ts){
   const dt = (ts-last)/1000; last = ts;
-  // WASD + shift
   if (myId && players.has(myId)){
     const dx = (keys['KeyD']?1:0) - (keys['KeyA']?1:0);
     const dy = (keys['KeyS']?1:0) - (keys['KeyW']?1:0);
@@ -99,6 +103,7 @@ function loop(ts){
     }
     send({type:'input', boost: !!keys['ShiftLeft'] || !!keys['ShiftRight']});
   }
+  pulse += dt * 6;
   draw();
   requestAnimationFrame(loop);
 }
@@ -121,7 +126,7 @@ function draw(){
   const cam = camera();
   ctx.clearRect(0,0,w,h);
 
-  // darker grid
+  // grid
   ctx.globalAlpha = 0.12;
   for (let x=0;x<mapSize;x+=100) ctx.fillRect(x-cam.x, 0-cam.y, 1, mapSize);
   for (let y=0;y<mapSize;y+=100) ctx.fillRect(0-cam.x, y-cam.y, mapSize, 1);
@@ -133,7 +138,7 @@ function draw(){
 
   // orbs (glow)
   orbs.forEach(o=>{
-    ctx.fillStyle = 'rgba(122,162,247,0.25)';
+    ctx.fillStyle = 'rgba(122,162,247,0.22)';
     ctx.beginPath(); ctx.arc(o.x-cam.x, o.y-cam.y, 12, 0, Math.PI*2); ctx.fill();
     ctx.fillStyle = '#7aa2f7';
     ctx.beginPath(); ctx.arc(o.x-cam.x, o.y-cam.y, 6, 0, Math.PI*2); ctx.fill();
@@ -156,7 +161,7 @@ function draw(){
     }
   }
 
-  // heads + circle hitbox indicator (subtle)
+  // heads: draw emoji as text, name (IP) below
   for (const p of players.values()){
     if (!p.alive) continue;
     drawHead(p, cam);
@@ -167,31 +172,47 @@ function draw(){
 
 function drawHead(p, cam){
   const x = p.x - cam.x, y = p.y - cam.y;
-  // subtle hit circle
+  // hit circle (subtle)
   ctx.globalAlpha = 0.08;
-  ctx.beginPath(); ctx.arc(x, y, HIT_R, 0, Math.PI*2); ctx.fillStyle='#fff'; ctx.fill();
+  ctx.beginPath(); 
+  ctx.arc(x, y, headRadius(p), 0, Math.PI*2);
+  ctx.fillStyle='#fff'; 
+  ctx.fill();
   ctx.globalAlpha = 1;
 
-  if (p.avatar==='cat'){
-    rect(x-10,y-10,20,20,'#f2f2f7'); tri(x-8,y-10,x-2,y-18,x+4,y-10,'#f2f2f7'); tri(x+8,y-10,x+2,y-18,x-4,y-10,'#f2f2f7'); dot(x-4,y-2); dot(x+4,y-2);
-  } else if (p.avatar==='robot'){
-    rect(x-12,y-12,24,24,'#7aa2f7'); rect(x-6,y-2,12,6,'#0a0d18'); dot(x-5,y-4); dot(x+5,y-4); rect(x-1,y-18,2,6,'#7aa2f7');
-  } else {
-    rect(x-12,y-8,24,16,'#e0af68'); ctx.fillStyle='#0a0d18'; ctx.fillRect(x-5,y-3,10,2);
-  }
-  ctx.fillStyle='#fff'; ctx.font='12px system-ui'; ctx.textAlign='center';
-  ctx.fillText(`${p.name} (${p.score})`, x, y-18);
+  // emoji
+	ctx.save();
+	let boost = p.boosting ? 1 : 0;
+	let size = headRadius(p) * 2;               // Basis auf Hitbox
+    let scaleBoost = boost ? 1.0 + Math.sin(pulse) * 0.12 : 1.0;
+    let scale = scaleBoost * (size / 22);       
+	ctx.translate(x, y);
+	ctx.scale(scale, scale);
+
+	// Glow: roter Schatten, wenn Boost aktiv
+	if(boost){
+	  ctx.shadowColor = "rgba(255,50,50,0.9)";
+	  ctx.shadowBlur = 25;
+	}
+
+	ctx.font = '22px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+	ctx.textAlign = 'center';
+	ctx.textBaseline = 'middle';
+	ctx.fillText(p.avatar, 0, 0);
+	ctx.restore();
+
+  // name = IP 
+  ctx.font = '12px system-ui';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(`${p.name} (${Math.floor(p.score)})`, x, y-18);
 }
 
-function rect(x,y,w,h,c){ ctx.fillStyle=c; ctx.fillRect(x,y,w,h); }
-function tri(x1,y1,x2,y2,x3,y3,c){ ctx.fillStyle=c; ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.lineTo(x3,y3); ctx.closePath(); ctx.fill(); }
-function dot(x,y){ ctx.fillStyle='#0a0d18'; ctx.beginPath(); ctx.arc(x,y,2,0,Math.PI*2); ctx.fill(); }
+function headRadius(p){
+  return 6 + Math.floor(p.score/5); // gleiche Logik wie trailWidth
+}
 
 function renderScoreboard(){
-  const list = Array.from(players.values()).sort((a,b)=> b.score - a.score).slice(0,20);
-  sb.innerHTML = list.map(p=> `<div class="scoreitem"><span class="name">${esc(p.name)}</span><span>${p.score}</span></div>`).join('');
+  const list = Array.from(players.values()).sort((a,b)=> b.score - a.score).slice(0,10);
+  sb.innerHTML = list.map(p=> `<div class="scoreitem"><span class="name">${esc(p.name)}</span><span>${Math.floor(p.score)}</span></div>`).join('');
 }
 function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-
-// Connect immediately so the page also shows status before joining
-connectWS();

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VLAN-Rush — Scoreboard</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    body{background:#0b0e1a;color:#fff;}
+    .board{max-width:800px;margin:40px auto;font-size:22px}
+    .row{display:flex;justify-content:space-between;border-bottom:1px solid #222;padding:12px 6px}
+    .row:first-child{font-weight:700;font-size:26px;border-bottom:2px solid #2a2f4a}
+  </style>
+</head>
+<body>
+  <div class="board">
+    <div class="row"><div>Spieler (IP)</div><div>Score</div></div>
+    <div id="rows"></div>
+  </div>
+  <script>
+    const ws = new WebSocket((location.protocol==='https:'?'wss://':'ws://') + location.host);
+    const rows = document.getElementById('rows');
+    ws.onmessage = (ev)=>{
+      const m = JSON.parse(ev.data);
+      if (m.type==='state'){
+        const list = m.players.filter(p=>p.alive).sort((a,b)=> b.score-a.score).slice(0,20);
+        rows.innerHTML = list.map(p=> `<div class="row"><div>${p.name}</div><div>${Math.floor(p.score)}</div></div>`).join('');
+      }
+    };
+  </script>
+</body>
+</html>

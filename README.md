@@ -1,15 +1,21 @@
 
-# VLAN-Rush V4.1 — IO Edition
+# VLAN-Rush V4.3 — IO Edition
 
-Fixes:
-- Avatar-Auswahl übernommen (Cat/Robot/Packet)
-- Orbs verschwinden zuverlässig (Server sendet komplette Liste)
-- Einheitliche Kreis-Hitbox (12px) für alle Avatare
-- Trail wächst länger (+6/Point) & dicker (+1px/5 Points)
-- HTTPS (self-signed), WSS automatisch
-- Spectator entfernt
+**What's new**
+- Emoji Avatars (real emoji rendering) — random on join
+- Name = client IP (auto), PC-Name optional later
+- Self-collision only if trail is in **forward cone** (default 120°)
+- Respawn invulnerability ~0.3s
+- Boost temporarily shrinks visual trail length (recovers when boost stops)
+- Pickup/Death sounds (WebAudio; no files needed)
+- Scoreboard page `/score.html` for projector
+- No spectator, no pre-join UI
 
-Start: `start_server.bat` (Windows) oder `./start_server.sh` (Linux/macOS)
-HTTP:  http://<IP>:3000/
-HTTPS: https://<IP>:3443/  (Warnung bestätigen)
-Admin: /admin.html  (Reset)
+**Start**
+- Windows: `start_server.bat`
+- Linux/macOS: `./start_server.sh`
+Open:
+- HTTP → `http://<IP>:3000/`
+- HTTPS → `https://<IP>:3443/` (accept cert warning)
+Admin reset: `/admin.html`
+Scoreboard: `/score.html`
