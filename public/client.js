@@ -7,13 +7,14 @@ window.addEventListener('resize', resize);
 resize();
 
 let ws, myId=null, mapSize=2000;
+let wBase=6, wGrow=0.03, lBase=30, lGrow=3, selfKill=0.85;
+let segmentPerPoint = 3;
+let segmentOverlap  = 0.25;
+let emojiPx = 22; // Größe S
 const players = new Map(); // id -> {id,name,avatar,x,y,score,alive,trail:[]}
 let orbs = [];
 let pulse = 0;
 
-let wBase = 6, wGrow = 0.03;
-let lBase = 30, lGrow = 3;
-let selfKill = 0.85;
 
 // WebAudio simple sounds
 let audioCtx;
@@ -57,6 +58,9 @@ function onMessage(ev){
       if (typeof msg.config.lBase === 'number') lBase = msg.config.lBase;
       if (typeof msg.config.lGrow === 'number') lGrow = msg.config.lGrow;
       if (typeof msg.config.selfKill === 'number') selfKill = msg.config.selfKill;
+      if (typeof msg.config.segmentPerPoint === 'number') segmentPerPoint = msg.config.segmentPerPoint;
+      if (typeof msg.config.segmentOverlap  === 'number') segmentOverlap  = msg.config.segmentOverlap;
+      if (typeof msg.config.emojiPx         === 'number') emojiPx         = msg.config.emojiPx;
       if (msg.config.version) console.log('VLAN-RUSH client synced with server:', msg.config.version);
     }
 
@@ -72,6 +76,9 @@ function onMessage(ev){
       if (typeof msg.config.lBase === 'number') lBase = msg.config.lBase;
       if (typeof msg.config.lGrow === 'number') lGrow = msg.config.lGrow;
       if (typeof msg.config.selfKill === 'number') selfKill = msg.config.selfKill;
+      if (typeof msg.config.segmentPerPoint === 'number') segmentPerPoint = msg.config.segmentPerPoint;
+      if (typeof msg.config.segmentOverlap  === 'number') segmentOverlap  = msg.config.segmentOverlap;
+      if (typeof msg.config.emojiPx         === 'number') emojiPx         = msg.config.emojiPx;
       if (msg.config.version) console.log('VLAN-RUSH client synced with server:', msg.config.version);
     }
 
@@ -182,28 +189,93 @@ function draw(){
     ctx.beginPath(); ctx.arc(o.x-cam.x, o.y-cam.y, 6, 0, Math.PI*2); ctx.fill();
   });
 
-  // trails
-  for (const p of players.values()){
-    if (!p.alive || !p.trail || p.trail.length<2) continue;
-    const width = trailWidth(p.score);
-    for (let i=1;i<p.trail.length;i++){
-      const a = p.trail[i-1], b = p.trail[i];
-      const age = (performance.now() - a.t)/1000;
-      const alpha = Math.max(0.2, 1.0 - age*0.8);
-      ctx.lineWidth = width;
-      ctx.strokeStyle = `rgba(122,162,247,${alpha})`;
-      ctx.beginPath();
-      ctx.moveTo(a.x - cam.x, a.y - cam.y);
-      ctx.lineTo(b.x - cam.x, b.y - cam.y);
-      ctx.stroke();
+  // SEGMENTS (Emoji-Kette) statt Linien
+for (const p of players.values()){
+    if (!p.alive || !p.trail || p.trail.length < 2) continue;
+
+    // Wieviele Segmente ergeben sich aus dem Score?
+    const count = Math.max(0, Math.floor(p.score / segmentPerPoint));
+    if (count <= 0) continue;
+
+    const overlap = Math.min(0.9, Math.max(0, segmentOverlap));
+    const spacing = emojiPx * (1 - overlap);
+
+    // Punkte entlang der Spur erzeugen (vom Ende rückwärts, gleichmäßig)
+    const pts = [];
+    let need = spacing;
+    for (let i = p.trail.length-1; i > 0 && pts.length < count; i--){
+      const a = p.trail[i], b = p.trail[i-1];
+      const dx = a.x - b.x, dy = a.y - b.y;
+      const segLen = Math.hypot(dx, dy);
+      if (segLen <= 0) continue;
+
+      while (need <= segLen && pts.length < count){
+        const t = 1 - (need / segLen);
+        const x = a.x + (b.x - a.x) * t;
+        const y = a.y + (b.y - a.y) * t;
+        // Orientierung (Tangent) für Rotation
+        const dir = Math.atan2(a.y - b.y, a.x - b.x);
+        pts.push({ x, y, dir });
+        need += spacing;
+      }
+      need -= segLen;
+    }
+
+    // Segmente zeichnen (unterhalb des Kopfes)
+    const font = `${emojiPx}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+    for (let i = pts.length-1; i >= 0; i--){ // ältere unten, neuere oben
+      const s = pts[i];
+      const sx = s.x - cam.x, sy = s.y - cam.y;
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.rotate(s.dir); // ausgerichtet an Bewegung
+      ctx.font = font;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(p.avatar, 0, 0);
+      ctx.restore();
     }
   }
 
-  // heads: draw emoji as text, name (IP) below
-  for (const p of players.values()){
-    if (!p.alive) continue;
-    drawHead(p, cam);
+
+  // HEAD — immer zuletzt zeichnen, Z-Index oben!
+for (const p of players.values()){
+  if (!p.alive) continue;
+
+  // Drehung bestimmen
+  let dir = 0;
+  if (p.trail && p.trail.length >= 2){
+    const a = p.trail[p.trail.length-1];
+    const b = p.trail[p.trail.length-2];
+    dir = Math.atan2(a.y - b.y, a.x - b.x);
   }
+
+  const x = p.x - cam.x;
+  const y = p.y - cam.y;
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(dir);
+
+  if (p.boosting){
+    ctx.shadowColor = "rgba(255,50,50,0.9)";
+    ctx.shadowBlur = 20;
+  }
+
+  ctx.font = `${emojiPx}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.fillText(p.avatar, 0, 0); // <-- KOPF-EMOJI
+
+  ctx.restore();
+
+  // Name + Score
+  ctx.font = '12px system-ui';
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.fillText(`${p.name} (${Math.floor(p.score)})`, x, y - emojiPx);
+}
 
   renderScoreboard();
 }

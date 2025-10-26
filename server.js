@@ -38,6 +38,32 @@ function cleanIP(remoteAddress){
   const m = remoteAddress.match(/(?:\\d+\\.){3}\\d+/);
   return m ? m[0] : remoteAddress;
 }
+function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
+
+// Segment-Hilfsfunktion: gleichmäßige Punkte entlang der Spur
+function sampleSegmentsFromTrail(trail, spacing, maxCount){
+  const out = [];
+  if (!trail || trail.length < 2 || spacing <= 0 || maxCount <= 0) return out;
+
+  // vom Ende (aktuelles Ende = Kopf) rückwärts integrieren
+  let need = spacing;
+  for (let i = trail.length-1; i > 0 && out.length < maxCount; i--){
+    const a = trail[i], b = trail[i-1];
+    const segLen = dist(a,b);
+    if (segLen <= 0) continue;
+
+    // Lauf entlang [a->b] rückwärts in Abständen von 'need'
+    while (need <= segLen && out.length < maxCount) {
+      const t = 1 - (need / segLen);            // Anteil Richtung a
+      const px = a.x + (b.x - a.x) * t;
+      const py = a.y + (b.y - a.y) * t;
+      out.push({ x: px, y: py });
+      need += spacing;
+    }
+    need -= segLen;
+  }
+  return out;
+}
 
 function spawnOrbs(n){ for(let i=0;i<n;i++){ state.orbs.push({x:rand(40,MAP_SIZE-40),y:rand(40,MAP_SIZE-40)}); } }
 spawnOrbs(ORB_COUNT);
@@ -217,6 +243,11 @@ function die(p){
       bonus: true,
       value: 5
     });
+    // Bonus-Orbs sofort an alle Clients senden ✅
+    broadcast({
+      type:'orbs',
+      orbs: state.orbs
+    });
   }
 }
 
@@ -287,24 +318,43 @@ setInterval(()=>{
 // collisions
 for (const a of state.players.values()){
   if (!a.alive) continue;
-  const headx = a.x, heady = a.y;
   if (t < a.invulnUntil) continue;
 
-  // SELF-COLLISION DISABLED: Spieler dürfen die eigene Spur kreuzen
+  const head = { x: a.x, y: a.y };
+
+  // SELF-COLLISION DISABLED: Eigene Spur ist harmlos
   // (kein Code für self-hit)
 
-  // other players: hit if head touches any segment of others (sum of radii)
+  // Andere Spieler: Head A kollidiert mit Segmentpunkten von B
   for (const b of state.players.values()){
-    if (a.id === b.id) continue;
-    const rad = trailWidth(a.score)/2 + trailWidth(b.score)/2;
-    const r2  = rad * rad;
-    for (let i=0;i<b.trail.length;i+=3){
-      const pt = b.trail[i];
-      if (d2xy(headx, heady, pt.x, pt.y) < r2){ die(a); break; }
+    if (a.id === b.id || !b.alive) continue;
+
+    // Segment-Anzahl: 1 Segment je segmentPerPoint Score
+    const per = cfg.segmentPerPoint ?? 3;
+    const segCount = Math.max(0, Math.floor(b.score / per));
+
+    if (segCount > 0) {
+      const emojiPx = cfg.emojiPx ?? 22;
+      const overlap = Math.min(0.9, Math.max(0, cfg.segmentOverlap ?? 0.25));
+      const spacing = emojiPx * (1 - overlap);          // Weltpixel-Abstand
+      const radius = emojiPx * 0.5;                      // Kreis-Hitbox pro Segment
+
+      // Punkte entlang der Spur von B ermitteln
+      const segPts = sampleSegmentsFromTrail(b.trail, spacing, segCount);
+
+      // Optional: Kopf von B zusätzlich als „Segment“
+      segPts.push({ x: b.x, y: b.y });
+
+      const r2 = (radius + radius) * (radius + radius);  // Head-Radius ~ radius
+      for (const s of segPts){
+        const dx = head.x - s.x, dy = head.y - s.y;
+        if (dx*dx + dy*dy < r2){ die(a); break; }
+      }
+      if (!a.alive) break;
     }
-    if (!a.alive) break;
   }
 }
+
 
   // snapshot
 	const snap = [];
