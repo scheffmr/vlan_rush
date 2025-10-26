@@ -7,13 +7,12 @@ window.addEventListener('resize', resize);
 resize();
 
 let ws, myId=null, mapSize=2000;
-let wBase=6, wGrow=0.03, lBase=30, lGrow=3, selfKill=0.85;
+let wBase=6, wGrow=0.03, lBase=30, lGrow=3;
 let segmentPerPoint = 3;
 let segmentOverlap  = 0.25;
 let emojiPx = 22; // Größe S
 const players = new Map(); // id -> {id,name,avatar,x,y,score,alive,trail:[]}
 let orbs = [];
-let pulse = 0;
 
 
 // WebAudio simple sounds
@@ -45,24 +44,25 @@ function connectWS(onOpen){
 }
 function send(o){ if(ws && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify(o)); }
 
+function applyServerConfig(config){
+  if (!config) return;
+  if (Number.isFinite(config.wBase)) wBase = config.wBase;
+  if (Number.isFinite(config.wGrow)) wGrow = config.wGrow;
+  if (Number.isFinite(config.lBase)) lBase = config.lBase;
+  if (Number.isFinite(config.lGrow)) lGrow = config.lGrow;
+  if (Number.isFinite(config.segmentPerPoint)) segmentPerPoint = config.segmentPerPoint;
+  if (Number.isFinite(config.segmentOverlap)) segmentOverlap = config.segmentOverlap;
+  if (Number.isFinite(config.emojiPx)) emojiPx = config.emojiPx;
+  if (config.version) console.log('VLAN-RUSH client synced with server:', config.version);
+}
+
 function onMessage(ev){
   const msg = JSON.parse(ev.data);
 
   if (msg.type === 'hello'){
     mapSize = msg.mapSize;
     orbs = msg.orbs || [];
-    // Config vom Server übernehmen (nur Anzeige/Render)
-    if (msg.config){
-      if (typeof msg.config.wBase === 'number') wBase = msg.config.wBase;
-      if (typeof msg.config.wGrow === 'number') wGrow = msg.config.wGrow;
-      if (typeof msg.config.lBase === 'number') lBase = msg.config.lBase;
-      if (typeof msg.config.lGrow === 'number') lGrow = msg.config.lGrow;
-      if (typeof msg.config.selfKill === 'number') selfKill = msg.config.selfKill;
-      if (typeof msg.config.segmentPerPoint === 'number') segmentPerPoint = msg.config.segmentPerPoint;
-      if (typeof msg.config.segmentOverlap  === 'number') segmentOverlap  = msg.config.segmentOverlap;
-      if (typeof msg.config.emojiPx         === 'number') emojiPx         = msg.config.emojiPx;
-      if (msg.config.version) console.log('VLAN-RUSH client synced with server:', msg.config.version);
-    }
+    applyServerConfig(msg.config);
 
   } else if (msg.type === 'welcome'){
     myId = msg.id;
@@ -70,17 +70,7 @@ function onMessage(ev){
     orbs = msg.orbs || [];
     players.clear();
     msg.players.forEach(p=> players.set(p.id, {...p, trail:[]}));
-    if (msg.config){
-      if (typeof msg.config.wBase === 'number') wBase = msg.config.wBase;
-      if (typeof msg.config.wGrow === 'number') wGrow = msg.config.wGrow;
-      if (typeof msg.config.lBase === 'number') lBase = msg.config.lBase;
-      if (typeof msg.config.lGrow === 'number') lGrow = msg.config.lGrow;
-      if (typeof msg.config.selfKill === 'number') selfKill = msg.config.selfKill;
-      if (typeof msg.config.segmentPerPoint === 'number') segmentPerPoint = msg.config.segmentPerPoint;
-      if (typeof msg.config.segmentOverlap  === 'number') segmentOverlap  = msg.config.segmentOverlap;
-      if (typeof msg.config.emojiPx         === 'number') emojiPx         = msg.config.emojiPx;
-      if (msg.config.version) console.log('VLAN-RUSH client synced with server:', msg.config.version);
-    }
+    applyServerConfig(msg.config);
 
   } else if (msg.type === 'spawn'){
     players.set(msg.player.id, {...msg.player, trail: []});
@@ -111,7 +101,7 @@ function onMessage(ev){
       }
       if (s.alive){
         p.trail.push({x:s.x, y:s.y, t:performance.now(), score:s.score});
-        const keep = trailKeep(s.score); // <— wichtig: selbe Formel wie Server
+        const keep = trailKeep(s.score); // <— gleiche Basisformel wie Server
         if (p.trail.length > keep) p.trail.splice(0, p.trail.length - keep);
       }
       p.boosting = !!s.boosting;
@@ -148,7 +138,6 @@ function loop(ts){
     }
     send({type:'input', boost: !!keys['ShiftLeft'] || !!keys['ShiftRight']});
   }
-  pulse += dt * 6;
   draw();
   requestAnimationFrame(loop);
 }
@@ -190,7 +179,7 @@ function draw(){
   });
 
   // SEGMENTS (Emoji-Kette) statt Linien
-for (const p of players.values()){
+  for (const p of players.values()){
     if (!p.alive || !p.trail || p.trail.length < 2) continue;
 
     // Wieviele Segmente ergeben sich aus dem Score?
@@ -239,94 +228,66 @@ for (const p of players.values()){
 
 
   // HEAD — immer zuletzt zeichnen, Z-Index oben!
-for (const p of players.values()){
-  if (!p.alive) continue;
+  for (const p of players.values()){
+    if (!p.alive) continue;
 
-  // Drehung bestimmen
-  let dir = 0;
-  if (p.trail && p.trail.length >= 2){
-    const a = p.trail[p.trail.length-1];
-    const b = p.trail[p.trail.length-2];
-    dir = Math.atan2(a.y - b.y, a.x - b.x);
+    // Drehung bestimmen
+    let dir = 0;
+    if (p.trail && p.trail.length >= 2){
+      const a = p.trail[p.trail.length-1];
+      const b = p.trail[p.trail.length-2];
+      dir = Math.atan2(a.y - b.y, a.x - b.x);
+    }
+
+    const x = p.x - cam.x;
+    const y = p.y - cam.y;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(dir);
+
+    if (p.boosting){
+      ctx.shadowColor = "rgba(255,50,50,0.9)";
+      ctx.shadowBlur = 20;
+    }
+
+    ctx.font = `${emojiPx}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.fillText(p.avatar, 0, 0); // <-- KOPF-EMOJI
+
+    ctx.restore();
+
+    // Name + Score
+    ctx.font = '12px system-ui';
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${p.name} (${Math.floor(p.score)})`, x, y - emojiPx);
   }
-
-  const x = p.x - cam.x;
-  const y = p.y - cam.y;
-
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(dir);
-
-  if (p.boosting){
-    ctx.shadowColor = "rgba(255,50,50,0.9)";
-    ctx.shadowBlur = 20;
-  }
-
-  ctx.font = `${emojiPx}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-
-  ctx.fillText(p.avatar, 0, 0); // <-- KOPF-EMOJI
-
-  ctx.restore();
-
-  // Name + Score
-  ctx.font = '12px system-ui';
-  ctx.fillStyle = '#ffffff';
-  ctx.textAlign = 'center';
-  ctx.fillText(`${p.name} (${Math.floor(p.score)})`, x, y - emojiPx);
-}
 
   renderScoreboard();
 }
 
-function drawHead(p, cam){
-  const x = p.x - cam.x, y = p.y - cam.y;
-  // hit circle (subtle)
-  ctx.globalAlpha = 0.08;
-  ctx.beginPath(); 
-  ctx.arc(x, y, headRadius(p), 0, Math.PI*2);
-  ctx.fillStyle='#fff'; 
-  ctx.fill();
-  ctx.globalAlpha = 1;
-
-  // emoji (Skalierung = 110% der Trailbreite, mit Boost-Puls)
-  ctx.save();
-  const w = trailWidth(p.score);
-  const r = w / 2;
-  const boost = p.boosting ? 1 : 0;
-  const scaleBoost = boost ? 1.0 + Math.sin(pulse) * 0.12 : 1.0;
-  const scale = (w / 12) * 1.1 * scaleBoost; // 12 war deine alte Basisgröße, *1.1 = +10%
-
-  ctx.translate(x, y);
-  ctx.scale(scale, scale);
-
-  if (boost){
-    ctx.shadowColor = "rgba(255,50,50,0.9)";
-    ctx.shadowBlur = 25;
-  }
-
-  ctx.font = '22px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(p.avatar, 0, 0);
-  ctx.restore();
-
-  // name = IP 
-  ctx.font = '12px system-ui';
-  ctx.fillStyle = '#fff';
-  ctx.fillText(`${p.name} (${Math.floor(p.score)})`, x, y-18);
-}
-
-function trailWidth(score){ return wBase + Math.floor(score * wGrow); }
-function trailKeep(score){ return Math.max(lBase, lBase + score * lGrow); }
-
-function headRadius(p){
- return trailWidth(p.score) / 2;; // gleiche Logik wie trailWidth
+function trailKeep(score){
+  return Math.max(lBase, lBase + score * lGrow);
 }
 
 function renderScoreboard(){
-  const list = Array.from(players.values()).sort((a,b)=> b.score - a.score).slice(0,10);
-  sb.innerHTML = list.map(p=> `<div class="scoreitem"><span class="name">${esc(p.name)}</span><span>${Math.floor(p.score)}</span></div>`).join('');
+  if (!sb) return;
+  const list = Array.from(players.values())
+    .sort((a,b)=> b.score - a.score)
+    .slice(0,10);
+
+  if (!list.length){
+    sb.innerHTML = `<div class="score-title">Punkte</div><div class="score-empty">Noch keine Spieler aktiv</div>`;
+    return;
+  }
+
+  const rows = list.map((p,idx)=>
+    `<div class="scoreitem"><span class="name">${idx+1}. ${esc(p.name)}</span><span class="points">${Math.floor(p.score)}</span></div>`
+  ).join('');
+
+  sb.innerHTML = `<div class="score-title">Punkte</div>${rows}`;
 }
 function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }

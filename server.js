@@ -14,11 +14,6 @@ const MAX_PLAYERS = cfg.maxPlayers || 20;
 const ORB_COUNT = cfg.orbCount || 160;
 const TICKRATE = cfg.tickRate || 30;
 const RESPAWN_DELAY = cfg.respawnDelayMs || 1500;
-const HIT_R = cfg.hitRadius || 12;
-const SELF_CONE_DEG = cfg.selfCollisionForwardDeg || 120;
-const INVULN_MS = cfg.respawnInvulnMs || 300;
-const BOOST_PEN_PER_S = cfg.boostPenaltyPerSec || 18;
-const BOOST_REC_PER_S = cfg.boostRecoveryPerSec || 12;
 
 const EMOJIS = ['🐱','🤖','📦','🖧','💻','🐶','🐭','🚀','🐸','😎'];
 
@@ -108,12 +103,15 @@ for (const server of [httpServer, httpsServer]){
 	  type:'hello',
 	  mapSize: MAP_SIZE,
 	  orbs: state.orbs,
-	  config: {
-		wBase: cfg.trailWidthBase, wGrow: cfg.trailWidthGrowth,
-		lBase: cfg.trailLengthBase, lGrow: cfg.trailLengthGrowth,
-		selfKill: cfg.selfHeadKillPercent,
-		version: '4.7'
-	  }
+          config: {
+                wBase: cfg.trailWidthBase, wGrow: cfg.trailWidthGrowth,
+                lBase: cfg.trailLengthBase, lGrow: cfg.trailLengthGrowth,
+                segmentPerPoint: cfg.segmentPerPoint,
+                segmentOverlap: cfg.segmentOverlap,
+                emojiPx: cfg.emojiPx,
+                selfKill: cfg.selfHeadKillPercent,
+                version: '4.7'
+          }
 	}));
     socket.on('data', buf=> handleWS(socket, buf, ip));
     socket.on('close', ()=> cleanup(socket));
@@ -195,12 +193,15 @@ function handleWS(socket, buffer, ip){
 	  mapSize: MAP_SIZE,
 	  players: Array.from(state.players.values()).map(slim),
 	  orbs: state.orbs,
-	  config: {
-		wBase: cfg.trailWidthBase, wGrow: cfg.trailWidthGrowth,
-		lBase: cfg.trailLengthBase, lGrow: cfg.trailLengthGrowth,
-		selfKill: cfg.selfHeadKillPercent,
-		version: '4.7'
-	  }
+          config: {
+                wBase: cfg.trailWidthBase, wGrow: cfg.trailWidthGrowth,
+                lBase: cfg.trailLengthBase, lGrow: cfg.trailLengthGrowth,
+                segmentPerPoint: cfg.segmentPerPoint,
+                segmentOverlap: cfg.segmentOverlap,
+                emojiPx: cfg.emojiPx,
+                selfKill: cfg.selfHeadKillPercent,
+                version: '4.7'
+          }
 	}));
     broadcast({type:'spawn', player: slim(p)});
   }
