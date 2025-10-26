@@ -156,7 +156,26 @@ function respawn(p){
   p.deadUntil = 0; p.invulnUntil = now() + (cfg.respawnInvulnMs || 300);
   p.boostPenalty = 0;
 }
-function die(p){ if (!p.alive) return; p.alive=false; p.deadUntil = now()+RESPAWN_DELAY; broadcast({type:'death', id:p.id}); }
+function die(p){
+  if (!p.alive) return;
+  p.alive=false;
+  const t = now();
+  p.deadUntil = t + RESPAWN_DELAY;
+  broadcast({type:'death', id:p.id});
+
+  // ✅ Bonus orb logic
+  const bonusCount = Math.min(5, Math.floor(p.score / 10));
+  for (let i = 0; i < bonusCount; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const d = 25 + Math.random() * 30;
+    state.orbs.push({
+      x: p.x + Math.cos(a) * d,
+      y: p.y + Math.sin(a) * d,
+      bonus: true,
+      value: 5
+    });
+  }
+}
 
 // Trail helpers
 function trailKeep(score, penalty){ return Math.max(30, 30 + score*2 - (penalty||0)); }
@@ -203,7 +222,11 @@ setInterval(()=>{
       if (d2xy(p.x,p.y,o.x,o.y) < (HIT_R+6)*(HIT_R+6)){
         state.orbs.splice(i,1);
         changed = true;
+        if (o.bonus) {
+        p.score += o.value || 5;
+      } else {
         p.score += 1;
+      }
       }
     }
     while (state.orbs.length < ORB_COUNT){ state.orbs.push({x:rand(40,MAP_SIZE-40),y:rand(40,MAP_SIZE-40)}); changed = true; }

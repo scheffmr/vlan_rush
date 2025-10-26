@@ -140,7 +140,7 @@ function draw(){
   orbs.forEach(o=>{
     ctx.fillStyle = 'rgba(122,162,247,0.22)';
     ctx.beginPath(); ctx.arc(o.x-cam.x, o.y-cam.y, 12, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle = '#7aa2f7';
+    ctx.fillStyle = o.bonus ? '#FFD700' : '#7aa2f7';
     ctx.beginPath(); ctx.arc(o.x-cam.x, o.y-cam.y, 6, 0, Math.PI*2); ctx.fill();
   });
 
@@ -213,6 +213,6 @@ function headRadius(p){
 
 function renderScoreboard(){
   const list = Array.from(players.values()).sort((a,b)=> b.score - a.score).slice(0,10);
-  sb.innerHTML = list.map(p=> `<div class="scoreitem"><span class="name">${esc(p.name)}</span><span>${Math.floor(p.score)}</span></div>`).join('');
+  sb.innerHTML = list.map(p=> `<div class="scoreitem"><span class="name">${esc(p.name)}</span><span>${Math.floor(Math.floor(p.score))</span></div>`).join('');
 }
 function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
