@@ -34,9 +34,12 @@ function now(){ return Date.now(); }
 function d2xy(ax,ay,bx,by){ const dx=ax-bx, dy=ay-by; return dx*dx+dy*dy; }
 function cleanIP(remoteAddress){
   if (!remoteAddress) return '0.0.0.0';
-  // strip IPv6 prefix like ::ffff:
-  const m = remoteAddress.match(/(?:\d+\.){3}\d+/);
-  return m ? m[0] : remoteAddress;
+  // strip IPv6 prefix like ::ffff: and return canonical IPv4 when present
+  const ipv4 = remoteAddress.match(/\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\b/);
+  if (ipv4) return ipv4[0];
+  // IPv6 scope identifiers (e.g. fe80::1%eth0) are noisy for logging/scoreboard
+  const zoneIndex = remoteAddress.indexOf('%');
+  return zoneIndex === -1 ? remoteAddress : remoteAddress.slice(0, zoneIndex);
 }
 function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
 
