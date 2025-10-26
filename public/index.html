@@ -3,35 +3,25 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LAN Rush — VLAN Edition</title>
+  <title>VLAN-Rush V2 — IO Edition</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="theme-mix">
-  <div id="ui">
-    <div class="title">LAN Rush — VLAN Edition</div>
-    <div class="row">
-      <label>Name:</label>
-      <input id="name" maxlength="16" placeholder="PC-Name oder Spitzname">
-    </div>
-    <div class="row">
-      <label>Avatar:</label>
+  <div id="join" class="card">
+    <div class="title">VLAN-Rush V2 — IO Edition</div>
+    <div class="row"><label>Name</label><input id="name" maxlength="16" placeholder="PC-Name oder Spitzname"></div>
+    <div class="row"><label>Avatar</label>
       <select id="avatar">
         <option value="cat">Katze 🐱</option>
         <option value="robot">Roboter 🤖</option>
         <option value="packet" selected>Netzpaket 📦</option>
       </select>
     </div>
-    <div class="row">
-      <button id="joinBtn">Beitreten</button>
-      <span id="status"></span>
-    </div>
-    <div class="row hint">Hinweis: Wenn der Server nicht erreichbar ist, stimmt deine VLAN/Trunk-Konfig nicht.</div>
+    <div class="row"><button id="joinBtn">Beitreten</button><span id="status"></span></div>
+    <div class="hint">Kein Connect? → VLAN/Trunk prüfen.</div>
   </div>
-
-  <canvas id="game" width="960" height="600"></canvas>
-
+  <canvas id="game" width="1200" height="720"></canvas>
   <div id="scoreboard"></div>
-
   <script src="client.js"></script>
 </body>
 </html>

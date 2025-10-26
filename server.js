@@ -1,183 +1,91 @@
 
-/**
- * LAN Rush — VLAN Edition
- * Minimal HTTP + WebSocket server with no external dependencies.
- * Node 18+ recommended.
- */
-
+// VLAN-Rush V2 — IO Edition (no external deps)
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-// Load config
-const cfgPath = path.join(__dirname, 'config.json');
-let CFG = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-const MODE = (process.env.MODE || 'collect').toLowerCase(); // collect | ctf | king
-
-const PORT = Number(process.env.PORT || CFG.port || 3000);
+const cfg = JSON.parse(fs.readFileSync(path.join(__dirname,'config.json'),'utf-8'));
+const PORT = Number(process.env.PORT || cfg.port || 3000);
+const MAP_SIZE = cfg.mapSize || 1800;
+const MAX_PLAYERS = cfg.maxPlayers || 20;
+const ORB_COUNT = cfg.orbCount || 120;
+const TICKRATE = cfg.tickRate || 30; // Hz
+const RESPAWN_DELAY = cfg.respawnDelayMs || 1500;
 
 const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'application/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.svg': 'image/svg+xml',
-  '.json': 'application/json; charset=utf-8'
+  '.html':'text/html; charset=utf-8','.js':'application/javascript; charset=utf-8',
+  '.css':'text/css; charset=utf-8','.png':'image/png','.svg':'image/svg+xml','.json':'application/json; charset=utf-8'
 };
 
-// In-memory game state
 const state = {
-  mode: MODE,                       // current mode
-  players: new Map(),               // id -> player
-  sockets: new Map(),               // socket -> id
-  pellets: [],                      // for collect mode
-  flags: {},                        // for ctf
-  hill: null,                       // for king
-  round: {
-    startedAt: 0,
-    timeLimitSec: CFG.round?.timeLimitSec ?? 300,
-    scoreLimit: CFG.round?.scoreLimit ?? 50,
-    running: false
-  },
-  mapSize: CFG.round?.mapSize ?? 1600
+  players: new Map(), // id -> {id,name,avatar,x,y,dir,spd,score,alive,trail:[{x,y,t}]}
+  sockets: new Map(), // socket -> id
+  orbs: [],           // {x,y}
 };
 
-// Utility
-function rand(min, max){ return Math.floor(Math.random()*(max-min+1))+min; }
+function rand(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
 function now(){ return Date.now(); }
-function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
 
-// Static file server
+function spawnOrbs(n){
+  for(let i=0;i<n;i++){
+    state.orbs.push({x: rand(40, MAP_SIZE-40), y: rand(40, MAP_SIZE-40)});
+  }
+}
+spawnOrbs(ORB_COUNT);
+
+// Static server
 function sendFile(res, filePath){
-  fs.readFile(filePath, (err, data)=>{
-    if(err){
-      res.writeHead(404);
-      res.end('Not found');
-      return;
-    }
-    const ext = path.extname(filePath).toLowerCase();
+  fs.readFile(filePath,(err,data)=>{
+    if(err){ res.writeHead(404); res.end('Not found'); return; }
+    const ext = path.extname(filePath);
     res.writeHead(200, {'Content-Type': MIME[ext] || 'application/octet-stream'});
     res.end(data);
   });
 }
-
-const server = http.createServer((req, res)=>{
-  // Simple routes
+const server = http.createServer((req,res)=>{
   let url = req.url.split('?')[0];
   if (url === '/') url = '/index.html';
-  if (url === '/spectator') url = '/spectator.html';
-  const filePath = path.join(__dirname, 'public', url);
-  if (filePath.indexOf(path.join(__dirname, 'public')) !== 0){
-    res.writeHead(403); res.end('Forbidden'); return;
-  }
-  fs.stat(filePath, (err, stat)=>{
-    if(err || !stat.isFile()){
-      res.writeHead(404); res.end('Not found'); return;
-    }
-    sendFile(res, filePath);
+  const filePath = path.join(__dirname,'public',url);
+  if (!filePath.startsWith(path.join(__dirname,'public'))){ res.writeHead(403).end('Forbidden'); return; }
+  fs.stat(filePath,(err,st)=>{
+    if(err || !st.isFile()){ res.writeHead(404).end('Not found'); return; }
+    sendFile(res,filePath);
   });
 });
 
-// --- Minimal WebSocket implementation (text frames only) ---
+// Minimal WS
 const clients = new Set();
-
-server.on('upgrade', (req, socket, head)=>{
-  if (req.headers['upgrade'] !== 'websocket'){
-    socket.destroy();
-    return;
-  }
+server.on('upgrade',(req,socket,head)=>{
+  if (req.headers['upgrade']!=='websocket'){ socket.destroy(); return; }
   const key = req.headers['sec-websocket-key'];
-  const acceptKey = crypto.createHash('sha1')
-    .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11', 'binary')
-    .digest('base64');
-  const headers = [
-    'HTTP/1.1 101 Switching Protocols',
-    'Upgrade: websocket',
-    'Connection: Upgrade',
-    `Sec-WebSocket-Accept: ${acceptKey}`
-  ];
-  socket.write(headers.concat('\r\n').join('\r\n'));
-
-  socket.isAlive = true;
-  socket.on('pong', ()=> socket.isAlive = true);
-
+  const acceptKey = require('crypto').createHash('sha1').update(key+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11','binary').digest('base64');
+  socket.write([
+    'HTTP/1.1 101 Switching Protocols','Upgrade: websocket','Connection: Upgrade',`Sec-WebSocket-Accept: ${acceptKey}`,'',''
+  ].join('\r\n'));
+  socket.isAlive=true; socket.on('pong',()=> socket.isAlive=true);
   clients.add(socket);
-
-  socket.on('data', (buffer)=>{
-    // Parse WS frame (simplified: text frames, <=125 bytes payload common, also handle >125)
-    const firstByte = buffer[0];
-    const opCode = firstByte & 0x0f;
-    if (opCode === 0x8){ // close
-      cleanupSocket(socket);
-      return;
-    }
-    const secondByte = buffer[1];
-    const isMasked = (secondByte & 0x80) === 0x80;
-    let payloadLen = secondByte & 0x7f;
-    let offset = 2;
-    if (payloadLen === 126){
-      payloadLen = buffer.readUInt16BE(offset);
-      offset += 2;
-    } else if (payloadLen === 127){
-      // Only support up to 2^32-1 here for simplicity
-      payloadLen = Number(buffer.readBigUInt64BE(offset));
-      offset += 8;
-    }
-    let maskingKey = null;
-    if (isMasked){
-      maskingKey = buffer.slice(offset, offset+4);
-      offset += 4;
-    }
-    let payload = buffer.slice(offset, offset+payloadLen);
-    if (isMasked){
-      for (let i=0; i<payload.length; i++){
-        payload[i] ^= maskingKey[i % 4];
-      }
-    }
-    if (opCode === 0x1){ // text
-      const text = payload.toString('utf8');
-      handleMessage(socket, text);
-    }
-  });
-
-  socket.on('close', ()=> cleanupSocket(socket));
-  socket.on('end', ()=> cleanupSocket(socket));
-  socket.on('error', ()=> cleanupSocket(socket));
-
-  // Send hello
-  sendWS(socket, JSON.stringify({type:'hello', mode: state.mode, mapSize: state.mapSize, round: state.round}));
+  sendWS(socket, JSON.stringify({type:'hello', mapSize: MAP_SIZE, orbs: state.orbs}));
+  socket.on('data', buf=> handleWSData(socket, buf));
+  socket.on('close',()=> cleanup(socket));
+  socket.on('end',()=> cleanup(socket));
+  socket.on('error',()=> cleanup(socket));
 });
 
 function sendWS(socket, dataStr){
-  // Text frame
-  const data = Buffer.from(dataStr);
-  const len = data.length;
+  const data = Buffer.from(dataStr); const len = data.length;
   let header;
-  if (len < 126){
-    header = Buffer.from([0x81, len]);
-  } else if (len < 65536){
-    header = Buffer.alloc(4);
-    header[0] = 0x81; header[1] = 126;
-    header.writeUInt16BE(len, 2);
-  } else {
-    header = Buffer.alloc(10);
-    header[0] = 0x81; header[1] = 127;
-    header.writeBigUInt64BE(BigInt(len), 2);
-  }
-  const frame = Buffer.concat([header, data]);
-  try { socket.write(frame); } catch(e){ /* ignore */ }
+  if (len<126){ header = Buffer.from([0x81,len]); }
+  else if (len<65536){ header = Buffer.alloc(4); header[0]=0x81; header[1]=126; header.writeUInt16BE(len,2); }
+  else { header=Buffer.alloc(10); header[0]=0x81; header[1]=127; header.writeBigUInt64BE(BigInt(len),2); }
+  try { socket.write(Buffer.concat([header, data])); } catch(e){}
 }
-
 function broadcast(obj){
-  const data = JSON.stringify(obj);
-  for (const s of clients){
-    sendWS(s, data);
-  }
+  const s = JSON.stringify(obj);
+  for(const c of clients) sendWS(c, s);
 }
-
-function cleanupSocket(socket){
+function cleanup(socket){
   if (!clients.has(socket)) return;
   const id = state.sockets.get(socket);
   clients.delete(socket);
@@ -186,160 +94,169 @@ function cleanupSocket(socket){
     broadcast({type:'despawn', id});
   }
   state.sockets.delete(socket);
-  try { socket.destroy(); } catch(e){}
+  try{ socket.destroy(); }catch(e){}
 }
+function parseFrame(buffer){
+  const first = buffer[0]; const op = first & 0x0f;
+  const second = buffer[1]; const masked = (second & 0x80)===0x80;
+  let len = second & 0x7f; let off = 2;
+  if (len===126){ len = buffer.readUInt16BE(off); off+=2; }
+  else if (len===127){ len = Number(buffer.readBigUInt64BE(off)); off+=8; }
+  let mask=null;
+  if (masked){ mask=buffer.slice(off,off+4); off+=4; }
+  let payload = buffer.slice(off, off+len);
+  if (masked){ for(let i=0;i<payload.length;i++){ payload[i]^=mask[i%4]; } }
+  return {op, payload: payload.toString('utf8')};
+}
+function handleWSData(socket, buffer){
+  const frame = parseFrame(buffer);
+  if (frame.op===0x8){ cleanup(socket); return; }
+  if (frame.op!==0x1) return;
+  let msg; try{ msg = JSON.parse(frame.payload); }catch(e){ return; }
 
-// Game logic
-function handleMessage(socket, text){
-  let msg;
-  try { msg = JSON.parse(text); } catch(e){ return; }
-
-  if (msg.type === 'join'){
-    if (state.players.size >= (CFG.maxPlayers || 20)){
-      sendWS(socket, JSON.stringify({type:'reject', reason:'server_full'}));
-      return;
-    }
+  if (msg.type==='join'){
+    if (state.players.size>=MAX_PLAYERS){ sendWS(socket, JSON.stringify({type:'reject', reason:'full'})); return; }
     const id = crypto.randomBytes(4).toString('hex');
-    const name = (msg.name || 'Player').slice(0,16);
+    const name = (msg.name||'Player').slice(0,16);
     const avatar = ['cat','robot','packet'].includes(msg.avatar) ? msg.avatar : 'packet';
-    const px = rand(50, state.mapSize-50);
-    const py = rand(50, state.mapSize-50);
-    const player = {
+    const p = {
       id, name, avatar,
-      x: px, y: py,
-      vx: 0, vy: 0,
-      score: 0,
-      lastSeen: now()
+      x: rand(60, MAP_SIZE-60), y: rand(60, MAP_SIZE-60),
+      dir: Math.random()*Math.PI*2, spd: 2.4,
+      score: 0, alive: true, deadUntil: 0,
+      trail: [] // array of points for collision (server side)
     };
-    state.players.set(id, player);
+    state.players.set(id, p);
     state.sockets.set(socket, id);
-
-    // Send current world
-    sendWS(socket, JSON.stringify({type:'welcome', id, players: Array.from(state.players.values()), pellets: state.pellets, flags: state.flags, hill: state.hill, round: state.round, mapSize: state.mapSize, mode: state.mode}));
-
-    // Tell others
-    broadcast({type:'spawn', player});
-
-  } else if (msg.type === 'input'){
-    // movement input from client
-    const id = state.sockets.get(socket);
-    if (!id) return;
-    const p = state.players.get(id);
-    if (!p) return;
-    p.lastSeen = now();
-    // Apply movement
-    const speed = 3.0;
-    p.x = clamp(p.x + (msg.dx||0)*speed, 0, state.mapSize);
-    p.y = clamp(p.y + (msg.dy||0)*speed, 0, state.mapSize);
-
-    // Pickups for 'collect'
-    if (state.mode === 'collect' && state.round.running){
-      for (let i=state.pellets.length-1; i>=0; i--){
-        const t = state.pellets[i];
-        const dx = p.x - t.x, dy = p.y - t.y;
-        if (dx*dx + dy*dy < 20*20){
-          state.pellets.splice(i,1);
-          p.score += 1;
-          broadcast({type:'pickup', id: p.id, pelletIndex: i, score: p.score});
-          if (p.score >= state.round.scoreLimit){
-            endRound(`Winner: ${p.name}`);
-          }
-        }
+    sendWS(socket, JSON.stringify({type:'welcome', id, mapSize: MAP_SIZE, players: Array.from(state.players.values()).map(slim), orbs: state.orbs}));
+    broadcast({type:'spawn', player: slim(p)});
+  }
+  else if (msg.type==='input'){
+    const id = state.sockets.get(socket); if (!id) return;
+    const p = state.players.get(id); if (!p) return;
+    // WASD or mouse angle
+    if (typeof msg.dir === 'number'){ p.dir = msg.dir; }
+    if (typeof msg.boost === 'boolean'){ p.spd = msg.boost ? 3.2 : 2.4; }
+  }
+  else if (msg.type==='admin'){
+    if (msg.action==='reset'){
+      // wipe orbs and respawn
+      state.orbs = [];
+      spawnOrbs(ORB_COUNT);
+      for (const p of state.players.values()){
+        respawn(p, true);
       }
-    }
-
-    // Periodically broadcast positions (lightweight)
-    broadcast({type:'pos', id: p.id, x: p.x, y: p.y, s: p.score});
-
-  } else if (msg.type === 'chat'){
-    const id = state.sockets.get(socket);
-    if (!id) return;
-    const p = state.players.get(id);
-    if (!p) return;
-    const text = (msg.text || '').slice(0,120);
-    if (!text) return;
-    broadcast({type:'chat', id: p.id, name: p.name, text});
-  } else if (msg.type === 'admin' && msg.action){
-    // no auth in offline lab; keep simple
-    if (msg.action === 'startRound'){
-      startRound();
-    } else if (msg.action === 'stopRound'){
-      endRound('Stopped');
-    } else if (msg.action === 'setMode'){
-      const m = (msg.mode||'collect').toLowerCase();
-      if (['collect','ctf','king'].includes(m)){
-        state.mode = m;
-        broadcast({type:'mode', mode: state.mode});
-      }
-    } else if (msg.action === 'setLimits'){
-      if (typeof msg.scoreLimit === 'number') state.round.scoreLimit = msg.scoreLimit;
-      if (typeof msg.timeLimitSec === 'number') state.round.timeLimitSec = msg.timeLimitSec;
-      broadcast({type:'roundLimits', scoreLimit: state.round.scoreLimit, timeLimitSec: state.round.timeLimitSec});
+      broadcast({type:'reset', orbs: state.orbs, players: Array.from(state.players.values()).map(slim)});
+    } else if (msg.action==='set' && msg.mapSize){
+      // not resizing live for simplicity; requires restart to apply globally
     }
   }
 }
 
-function startRound(){
-  // Reset scores
-  for (const p of state.players.values()){ p.score = 0; }
-  // Spawn pellets for 'collect'
-  if (state.mode === 'collect'){
-    state.pellets = [];
-    const count = 80;
-    for (let i=0; i<count; i++){
-      state.pellets.push({x: rand(30, state.mapSize-30), y: rand(30, state.mapSize-30)});
-    }
-  }
-  // Minimal placeholders for other modes (ctf/king)
-  if (state.mode === 'ctf'){
-    state.flags = {
-      A: {x: rand(100, 200), y: rand(100, 200)},
-      B: {x: rand(state.mapSize-200, state.mapSize-100), y: rand(state.mapSize-200, state.mapSize-100)}
-    };
-  }
-  if (state.mode === 'king'){
-    state.hill = {x: state.mapSize/2, y: state.mapSize/2, r: 120};
-  }
-  state.round.running = true;
-  state.round.startedAt = now();
-  broadcast({type:'roundStart', mode: state.mode, pellets: state.pellets, flags: state.flags, hill: state.hill, round: state.round});
-  // Timer
-  if (state.round.timeLimitSec > 0){
-    setTimeout(()=>{
-      if (state.round.running){
-        // Determine winner by score
-        let winner = null;
-        for (const p of state.players.values()){
-          if (!winner || p.score > winner.score) winner = p;
-        }
-        endRound(winner ? `Time! Winner: ${winner.name}` : 'Time!');
-      }
-    }, state.round.timeLimitSec * 1000);
-  }
+function slim(p){
+  return {id:p.id,name:p.name,avatar:p.avatar,x:p.x,y:p.y,score:p.score,alive:p.alive};
 }
 
-function endRound(reason){
-  state.round.running = false;
-  broadcast({type:'roundEnd', reason});
+function lengthForScore(score){
+  // how long the light trail is (server keeps last N points)
+  return 30 + Math.min(120, Math.floor(score*2));
 }
 
-// Heartbeat ping
+function respawn(p, hard){
+  p.x = rand(60, MAP_SIZE-60); p.y = rand(60, MAP_SIZE-60);
+  p.dir = Math.random()*Math.PI*2; p.spd = 2.4;
+  p.score = hard ? 0 : 0;
+  p.trail.length = 0;
+  p.alive = true; p.deadUntil = 0;
+}
+
+function die(p, reason){
+  if (!p.alive) return;
+  p.alive = false;
+  p.deadUntil = now() + RESPAWN_DELAY;
+  broadcast({type:'death', id: p.id});
+}
+
+// Distance squared
+function d2(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return dx*dx+dy*dy; }
+
+// Main tick
 setInterval(()=>{
-  for (const s of clients){
+  const t = now();
+  // move players
+  for (const p of state.players.values()){
+    if (!p.alive){
+      if (t >= p.deadUntil){
+        respawn(p, true);
+        broadcast({type:'spawn', player: slim(p)});
+      }
+      continue;
+    }
+    // movement
+    p.x += Math.cos(p.dir)*p.spd;
+    p.y += Math.sin(p.dir)*p.spd;
+
+    // walls
+    if (p.x<10 || p.y<10 || p.x>MAP_SIZE-10 || p.y>MAP_SIZE-10){
+      die(p,'wall'); continue;
+    }
+
+    // trail update
+    p.trail.push({x:p.x, y:p.y, t});
+    const need = lengthForScore(p.score);
+    if (p.trail.length > need) p.trail.splice(0, p.trail.length-need);
+
+    // collect orbs
+    for (let i=state.orbs.length-1;i>=0;i--){
+      const o = state.orbs[i];
+      if (d2(p,o) < 22*22){
+        state.orbs.splice(i,1);
+        state.orbs.push({x: rand(40, MAP_SIZE-40), y: rand(40, MAP_SIZE-40)});
+        p.score += 1;
+        broadcast({type:'orb', id:p.id, score:p.score, remove:i, add: state.orbs[state.orbs.length-1]});
+      }
+    }
+  }
+
+  // collision: head vs trails of others (and own, with small ignore to avoid instant death)
+  for (const a of state.players.values()){
+    if (!a.alive) continue;
+    const head = {x:a.x, y:a.y};
+    for (const b of state.players.values()){
+      if (a.id===b.id && b.trail.length>10){
+        // self collision: check older points excluding last 10
+        for (let i=0;i<b.trail.length-12;i+=3){
+          const pt = b.trail[i];
+          if (d2(head, pt) < 12*12){ die(a,'self'); break; }
+        }
+        continue;
+      }
+      if (a.id===b.id) continue;
+      for (let i=0;i<b.trail.length; i+=3){
+        const pt = b.trail[i];
+        if (d2(head, pt) < 12*12){ die(a,'hit'); break; }
+      }
+      if (!a.alive) break;
+    }
+  }
+
+  // broadcast compact state (positions & scores)
+  const snap = [];
+  for (const p of state.players.values()){
+    snap.push({id:p.id,x:p.x,y:p.y,score:p.score,alive:p.alive});
+  }
+  broadcast({type:'state', players: snap});
+}, 1000/TICKRATE);
+
+// Heartbeat
+setInterval(()=>{
+  for(const s of clients){
     try {
-      s.isAlive = false;
-      // send ping frame
-      const ping = Buffer.from([0x89, 0x00]);
-      s.write(ping);
-      setTimeout(()=>{
-        if (!s.isAlive) cleanupSocket(s);
-      }, 10000);
+      const ping = Buffer.from([0x89,0x00]); s.write(ping);
     } catch(e){}
   }
 }, 15000);
 
-server.listen(PORT, '0.0.0.0', ()=>{
-  console.log(`[LAN RUSH] Server listening on 0.0.0.0:${PORT} (mode=${state.mode})`);
+server.listen(PORT,'0.0.0.0', ()=>{
+  console.log(`[VLAN-RUSH V2] Listening on 0.0.0.0:${PORT}`);
 });
-
-// ---------------- PUBLIC FILES ----------------

@@ -1,247 +1,208 @@
-// LAN Rush client
+// VLAN-Rush V2 client
 const isSpectator = !!window.SPECTATOR;
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const sb = document.getElementById('scoreboard');
 
-let ws, myId=null, mode='collect', mapSize=1600, round={running:false, timeLimitSec:300, scoreLimit:50, startedAt:0};
-const players = new Map(); // id -> {x,y,score,avatar,name}
-let pellets = [];
-let flags = {};
-let hill = null;
+let ws, myId=null, mapSize=1800, connected=false;
+const players = new Map(); // id -> {x,y,score,alive,name,avatar,trail:[]}
+let orbs = [];
 
-// UI elements (non-spectator)
-const joinBtn = document.getElementById('joinBtn');
+// UI
+const joinBox = document.getElementById('join');
 const statusEl = document.getElementById('status');
+const joinBtn = document.getElementById('joinBtn');
 
 if (!isSpectator){
-  joinBtn.onclick = connectAndJoin;
+  joinBtn.onclick = ()=>{
+    connectWS(()=>{
+      const name = document.getElementById('name').value || `Player${Math.floor(Math.random()*1000)}`;
+      const avatar = document.getElementById('avatar').value || 'packet';
+      send({type:'join', name, avatar});
+    });
+  };
 } else {
-  // spectator: auto-connect read-only
   connectWS();
 }
 
-function connectAndJoin(){
-  const name = document.getElementById('name').value || `Player${Math.floor(Math.random()*1000)}`;
-  const avatar = document.getElementById('avatar').value || 'packet';
-  connectWS(()=>{
-    send({type:'join', name, avatar});
-  });
-}
-
 function connectWS(onOpen){
-  const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+  const url = (location.protocol==='https:'?'wss://':'ws://') + location.host;
   ws = new WebSocket(url);
-  ws.onopen = ()=>{
-    status('Verbunden.');
-    if (onOpen) onOpen();
-  };
-  ws.onclose = ()=>{
-    status('Verbindung getrennt. Prüfe VLAN/Trunk?');
-    setTimeout(()=> connectWS(()=>{
-      if (myId) send({type:'join', name: players.get(myId)?.name || 'Player', avatar: players.get(myId)?.avatar || 'packet'});
-    }), 1500);
-  };
+  ws.onopen = ()=>{ status('verbunden'); if (onOpen) onOpen(); };
+  ws.onclose = ()=>{ status('getrennt — VLAN/Trunk prüfen'); setTimeout(()=> connectWS(()=>{ if (myId) send({type:'join', name: players.get(myId)?.name || 'Player', avatar: players.get(myId)?.avatar || 'packet'}); }), 1200); };
   ws.onerror = ()=> status('WS-Fehler');
   ws.onmessage = onMessage;
 }
 
-function status(t){
-  if (statusEl) statusEl.textContent = t;
-}
+function status(t){ if(statusEl) statusEl.textContent = t; }
+function send(o){ if(ws && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify(o)); }
 
 function onMessage(ev){
   const msg = JSON.parse(ev.data);
-  if (msg.type === 'hello'){
-    mode = msg.mode; mapSize = msg.mapSize; round = msg.round;
-  } else if (msg.type === 'welcome'){
-    myId = msg.id;
-    mode = msg.mode; mapSize = msg.mapSize; round = msg.round;
+  if (msg.type==='hello'){
+    mapSize = msg.mapSize;
+    orbs = msg.orbs||[];
+  } else if (msg.type==='welcome'){
+    myId = msg.id; mapSize = msg.mapSize; orbs = msg.orbs||[];
     players.clear();
-    msg.players.forEach(p=> players.set(p.id, p));
-    pellets = msg.pellets || [];
-    flags = msg.flags || {};
-    hill = msg.hill || null;
-  } else if (msg.type === 'spawn'){
-    players.set(msg.player.id, msg.player);
-  } else if (msg.type === 'despawn'){
+    msg.players.forEach(p=> players.set(p.id, {...p, trail:[]}));
+    if (joinBox) joinBox.style.display = 'none'; // hide UI after join
+    connected = true;
+  } else if (msg.type==='spawn'){
+    players.set(msg.player.id, {...msg.player, trail: []});
+  } else if (msg.type==='despawn'){
     players.delete(msg.id);
-  } else if (msg.type === 'pos'){
-    const p = players.get(msg.id);
-    if (p){ p.x = msg.x; p.y = msg.y; p.score = msg.s; }
-  } else if (msg.type === 'pickup'){
-    const p = players.get(msg.id);
-    if (p){ p.score = msg.score; }
-    pellets.splice(msg.pelletIndex,1);
-  } else if (msg.type === 'roundStart'){
-    round = msg.round; mode = msg.mode;
-    pellets = msg.pellets || []; flags = msg.flags || {}; hill = msg.hill || null;
-  } else if (msg.type === 'roundEnd'){
-    // show small toast
-    status('Runde Ende: ' + (msg.reason||''));
-  } else if (msg.type === 'mode'){
-    mode = msg.mode;
-  } else if (msg.type === 'roundLimits'){
-    round.scoreLimit = msg.scoreLimit; round.timeLimitSec = msg.timeLimitSec;
+  } else if (msg.type==='death'){
+    const p = players.get(msg.id); if (p) { p.alive=false; }
+  } else if (msg.type==='orb'){
+    const p = players.get(msg.id); if (p){ p.score = msg.score; }
+    // update orbs
+    if (typeof msg.remove === 'number') orbs.splice(msg.remove,1);
+    if (msg.add) orbs.push(msg.add);
+  } else if (msg.type==='reset'){
+    players.clear();
+    msg.players.forEach(p=> players.set(p.id, {...p, trail:[]}));
+    orbs = msg.orbs || [];
+  } else if (msg.type==='state'){
+    // update positions
+    msg.players.forEach(s=>{
+      let p = players.get(s.id);
+      if (!p){
+        p = {id:s.id,name:s.name||('P'+s.id),avatar:'packet',x:s.x,y:s.y,score:s.score,alive:s.alive,trail:[]};
+        players.set(s.id,p);
+      }
+      // maintain local trail for rendering
+      if (p.alive){
+        p.trail.push({x:s.x, y:s.y, t:performance.now()});
+        const keep = 150 + Math.min(300, p.score*5);
+        if (p.trail.length>keep) p.trail.splice(0, p.trail.length-keep);
+      } else {
+        p.trail.length = 0;
+      }
+      p.x = s.x; p.y = s.y; p.score = s.score; p.alive = s.alive;
+    });
   }
 }
 
-// Input
+// input
 const keys = {};
 window.addEventListener('keydown', e=> keys[e.code]=true);
 window.addEventListener('keyup', e=> keys[e.code]=false);
+window.addEventListener('mousemove', e=>{
+  if (!myId || !players.has(myId)) return;
+  const me = players.get(myId);
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const cam = camera();
+  const wx = mx + cam.x, wy = my + cam.y;
+  const ang = Math.atan2(wy - me.y, wx - me.x);
+  send({type:'input', dir: ang});
+});
 
-function send(obj){
-  if (ws && ws.readyState === WebSocket.OPEN){
-    ws.send(JSON.stringify(obj));
-  }
-}
-
-// Game loop
 let last = performance.now();
 function loop(ts){
-  const dt = (ts - last)/1000; last = ts;
-  update(dt); draw();
+  const dt = (ts-last)/1000; last = ts;
+  // keyboard steering (WASD)
+  if (myId && players.has(myId)){
+    const me = players.get(myId);
+    const dx = (keys['KeyD']?1:0) - (keys['KeyA']?1:0);
+    const dy = (keys['KeyS']?1:0) - (keys['KeyW']?1:0);
+    if (dx||dy){
+      const ang = Math.atan2(dy, dx);
+      send({type:'input', dir: ang});
+    }
+    // boost on Shift
+    send({type:'input', boost: !!keys['ShiftLeft'] || !!keys['ShiftRight']});
+  }
+  draw();
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
 
-let inputTick = 0;
-function update(dt){
-  // local input -> send to server
-  inputTick += dt;
-  if (!isSpectator && myId){
-    const dx = (keys['KeyD']?1:0) - (keys['KeyA']?1:0);
-    const dy = (keys['KeyS']?1:0) - (keys['KeyW']?1:0);
-    if (dx || dy){
-      if (inputTick > 0.02){
-        send({type:'input', dx, dy});
-        inputTick = 0;
-      }
-    }
+function camera(){
+  const w=canvas.width, h=canvas.height;
+  if (isSpectator || !myId || !players.has(myId)){
+    return {x: mapSize/2 - w/2, y: mapSize/2 - h/2};
   }
-  // update scoreboard
-  renderScoreboard();
+  const me = players.get(myId);
+  let x = me.x - w/2, y = me.y - h/2;
+  x = Math.max(0, Math.min(mapSize - w, x));
+  y = Math.max(0, Math.min(mapSize - h, y));
+  return {x,y};
 }
 
 function draw(){
-  const w = canvas.width, h = canvas.height;
+  const w=canvas.width, h=canvas.height;
+  const cam = camera();
   ctx.clearRect(0,0,w,h);
 
-  // camera: center on me if not spectator
-  let camX = 0, camY = 0;
-  if (!isSpectator && myId && players.has(myId)){
-    const me = players.get(myId);
-    camX = me.x - w/2; camY = me.y - h/2;
-  } else {
-    // spectator: center map
-    camX = mapSize/2 - w/2; camY = mapSize/2 - h/2;
-  }
-  // clamp camera
-  camX = Math.max(0, Math.min(mapSize - w, camX));
-  camY = Math.max(0, Math.min(mapSize - h, camY));
-
   // grid
-  ctx.globalAlpha = 0.2;
-  for (let x=0; x<mapSize; x+=80){
-    ctx.fillRect(x - camX, 0 - camY, 1, mapSize);
-  }
-  for (let y=0; y<mapSize; y+=80){
-    ctx.fillRect(0 - camX, y - camY, mapSize, 1);
-  }
+  ctx.globalAlpha = 0.15;
+  for (let x=0;x<mapSize;x+=100) ctx.fillRect(x-cam.x, 0-cam.y, 1, mapSize);
+  for (let y=0;y<mapSize;y+=100) ctx.fillRect(0-cam.x, y-cam.y, mapSize, 1);
   ctx.globalAlpha = 1;
 
-  // draw pellets
-  if (mode === 'collect'){
-    ctx.fillStyle = '#7aa2f7';
-    pellets.forEach(t=>{
-      ctx.beginPath();
-      ctx.arc(t.x - camX, t.y - camY, 7, 0, Math.PI*2);
-      ctx.fill();
-    });
-  }
+  // border
+  ctx.strokeStyle = '#2a2f4a';
+  ctx.strokeRect(-cam.x, -cam.y, mapSize, mapSize);
 
-  // draw flags
-  if (mode === 'ctf'){
-    ctx.fillStyle = '#f7768e';
-    if (flags.A){
-      ctx.fillRect(flags.A.x - 8 - camX, flags.A.y - 16 - camY, 16, 16);
-    }
-    ctx.fillStyle = '#9ece6a';
-    if (flags.B){
-      ctx.fillRect(flags.B.x - 8 - camX, flags.B.y - 16 - camY, 16, 16);
-    }
-  }
+  // orbs
+  ctx.fillStyle = '#7aa2f7';
+  orbs.forEach(o=>{
+    ctx.beginPath(); ctx.arc(o.x-cam.x, o.y-cam.y, 6, 0, Math.PI*2); ctx.fill();
+  });
 
-  // draw hill
-  if (mode === 'king' && hill){
-    ctx.globalAlpha = 0.15;
-    ctx.beginPath();
-    ctx.arc(hill.x - camX, hill.y - camY, hill.r, 0, Math.PI*2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
-
-  // draw players
+  // trails
   for (const p of players.values()){
-    drawPlayer(p, camX, camY);
+    drawTrail(p, cam);
   }
 
-  // status bar
-  drawStatusBar();
+  // heads
+  for (const p of players.values()){
+    if (!p.alive) continue;
+    drawHead(p, cam);
+  }
+
+  renderScoreboard();
 }
 
-function drawPlayer(p, camX, camY){
-  const x = p.x - camX, y = p.y - camY;
-  // avatar styles
-  if (p.avatar === 'cat'){
-    // cat head
-    rect(x-10,y-10,20,20,'#f2f2f7');
-    tri(x-8,y-10,x-2,y-18,x+4,y-10,'#f2f2f7');
-    tri(x+8,y-10,x+2,y-18,x-4,y-10,'#f2f2f7');
-    dot(x-4,y-2); dot(x+4,y-2); // eyes
-  } else if (p.avatar === 'robot'){
-    rect(x-12,y-12,24,24,'#7aa2f7');
-    rect(x-6,y-2,12,6,'#0a0d18'); // mouth
-    dot(x-5,y-4); dot(x+5,y-4);   // eyes
-    rect(x-1,y-18,2,6,'#7aa2f7'); // antenna
-  } else {
-    // packet
-    rect(x-12,y-8,24,16,'#e0af68');
-    ctx.fillStyle = '#0a0d18'; ctx.fillRect(x-5,y-3,10,2);
+function drawTrail(p, cam){
+  if (!p.trail || p.trail.length<2) return;
+  const nowt = performance.now();
+  ctx.lineWidth = 6;
+  for (let i=1;i<p.trail.length;i++){
+    const a = p.trail[i-1], b = p.trail[i];
+    const age = (nowt - a.t)/1000;
+    const alpha = Math.max(0, 1.2 - age*0.8); // fade
+    ctx.strokeStyle = `rgba(122,162,247,${alpha})`;
+    ctx.beginPath();
+    ctx.moveTo(a.x - cam.x, a.y - cam.y);
+    ctx.lineTo(b.x - cam.x, b.y - cam.y);
+    ctx.stroke();
   }
-  // nametag
-  ctx.fillStyle = '#fff';
-  ctx.font = '12px system-ui';
-  ctx.textAlign = 'center';
+}
+
+function drawHead(p, cam){
+  const x = p.x - cam.x, y = p.y - cam.y;
+  if (p.avatar==='cat'){
+    rect(x-10,y-10,20,20,'#f2f2f7'); tri(x-8,y-10,x-2,y-18,x+4,y-10,'#f2f2f7'); tri(x+8,y-10,x+2,y-18,x-4,y-10,'#f2f2f7'); dot(x-4,y-2); dot(x+4,y-2);
+  } else if (p.avatar==='robot'){
+    rect(x-12,y-12,24,24,'#7aa2f7'); rect(x-6,y-2,12,6,'#0a0d18'); dot(x-5,y-4); dot(x+5,y-4); rect(x-1,y-18,2,6,'#7aa2f7');
+  } else {
+    rect(x-12,y-8,24,16,'#e0af68'); ctx.fillStyle='#0a0d18'; ctx.fillRect(x-5,y-3,10,2);
+  }
+  // name/score
+  ctx.fillStyle='#fff'; ctx.font='12px system-ui'; ctx.textAlign='center';
   ctx.fillText(`${p.name} (${p.score})`, x, y-18);
 }
 
-function rect(x,y,w,h,color){
-  ctx.fillStyle = color; ctx.fillRect(x,y,w,h);
-}
-function tri(x1,y1,x2,y2,x3,y3,color){
-  ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.lineTo(x3,y3); ctx.closePath(); ctx.fill();
-}
-function dot(x,y){ ctx.fillStyle = '#0a0d18'; ctx.beginPath(); ctx.arc(x,y,2,0,Math.PI*2); ctx.fill(); }
+function rect(x,y,w,h,c){ ctx.fillStyle=c; ctx.fillRect(x,y,w,h); }
+function tri(x1,y1,x2,y2,x3,y3,c){ ctx.fillStyle=c; ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.lineTo(x3,y3); ctx.closePath(); ctx.fill(); }
+function dot(x,y){ ctx.fillStyle='#0a0d18'; ctx.beginPath(); ctx.arc(x,y,2,0,Math.PI*2); ctx.fill(); }
 
 function renderScoreboard(){
   if (!sb) return;
   const list = Array.from(players.values()).sort((a,b)=> b.score - a.score).slice(0,20);
-  sb.innerHTML = list.map(p=> `<div class="scoreitem"><span class="name">${esc(p.name)}</span><span class="stat">${p.score}</span></div>`).join('');
+  sb.innerHTML = list.map(p=> `<div class="scoreitem"><span class="name">${esc(p.name)}</span><span>${p.score}</span></div>`).join('');
 }
 function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-
-function drawStatusBar(){
-  const t = document.querySelector('.statusbar') || (()=>{
-    const d = document.createElement('div'); d.className='statusbar'; document.body.appendChild(d); return d;
-  })();
-  const running = round.running ? 'läuft' : 'gestoppt';
-  let remain = '';
-  if (round.running && round.timeLimitSec>0){
-    const elapsed = Math.floor((Date.now() - round.startedAt)/1000);
-    const left = Math.max(0, round.timeLimitSec - elapsed);
-    remain = ` | Rest: ${left}s`;
-  }
-  t.textContent = `Modus: ${mode} | Runde: ${running} | Score-Limit: ${round.scoreLimit}${remain}`;
-}

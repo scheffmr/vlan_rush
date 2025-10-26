@@ -1,9 +1,8 @@
 {
   "port": 3000,
   "maxPlayers": 20,
-  "round": {
-    "scoreLimit": 50,
-    "timeLimitSec": 300,
-    "mapSize": 1600
-  }
+  "mapSize": 1800,
+  "orbCount": 120,
+  "tickRate": 30,
+  "respawnDelayMs": 1500
 }
