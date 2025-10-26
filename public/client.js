@@ -2,11 +2,18 @@
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const sb = document.getElementById('scoreboard');
+function resize(){ canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize);
+resize();
 
 let ws, myId=null, mapSize=2000;
 const players = new Map(); // id -> {id,name,avatar,x,y,score,alive,trail:[]}
 let orbs = [];
 let pulse = 0;
+
+let wBase = 6, wGrow = 0.03;
+let lBase = 30, lGrow = 3;
+let selfKill = 0.85;
 
 // WebAudio simple sounds
 let audioCtx;
@@ -39,6 +46,13 @@ function send(o){ if(ws && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringif
 
 function onMessage(ev){
   const msg = JSON.parse(ev.data);
+  if (msg.type === 'hello' || msg.type === 'welcome') {
+	  if (msg.wBase !== undefined) wBase = msg.wBase;
+	  if (msg.wGrow !== undefined) wGrow = msg.wGrow;
+	  if (msg.lBase !== undefined) lBase = msg.lBase;
+	  if (msg.lGrow !== undefined) lGrow = msg.lGrow;
+	  if (msg.selfKill !== undefined) selfKill = msg.selfKill;
+	} 
   if (msg.type==='hello'){
     mapSize = msg.mapSize; orbs = msg.orbs || [];
   } else if (msg.type==='welcome'){
@@ -67,8 +81,10 @@ function onMessage(ev){
       }
       if (s.alive){
         p.trail.push({x:s.x, y:s.y, t:performance.now(), score:s.score});
-        const keep = 30 + s.score;
-        if (p.trail.length>keep) p.trail.splice(0, p.trail.length-keep);
+        const keep = trailKeep(s.score, 0); // identisch zur Server-Logik
+		if (p.trail.length > keep) {
+			p.trail.splice(0, p.trail.length - keep);
+		}
       }
 	  p.boosting = !!s.boosting;
       p.x=s.x; p.y=s.y; p.score=s.score; p.alive=s.alive; p.avatar=s.avatar; p.name=s.name;
@@ -147,7 +163,7 @@ function draw(){
   // trails
   for (const p of players.values()){
     if (!p.alive || !p.trail || p.trail.length<2) continue;
-    const width = 6 + Math.floor(p.score/5);
+    const width = trailWidth(p.score);
     for (let i=1;i<p.trail.length;i++){
       const a = p.trail[i-1], b = p.trail[i];
       const age = (performance.now() - a.t)/1000;
@@ -180,26 +196,27 @@ function drawHead(p, cam){
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  // emoji
-	ctx.save();
-	let boost = p.boosting ? 1 : 0;
-	let size = headRadius(p) * 2;               // Basis auf Hitbox
-    let scaleBoost = boost ? 1.0 + Math.sin(pulse) * 0.12 : 1.0;
-    let scale = scaleBoost * (size / 22);       
-	ctx.translate(x, y);
-	ctx.scale(scale, scale);
+  // emoji (Skalierung = 110% der Trailbreite, mit Boost-Puls)
+  ctx.save();
+  const w = trailWidth(p.score);
+  const r = w / 2;
+  const boost = p.boosting ? 1 : 0;
+  const scaleBoost = boost ? 1.0 + Math.sin(pulse) * 0.12 : 1.0;
+  const scale = (w / 12) * 1.1 * scaleBoost; // 12 war deine alte Basisgröße, *1.1 = +10%
 
-	// Glow: roter Schatten, wenn Boost aktiv
-	if(boost){
-	  ctx.shadowColor = "rgba(255,50,50,0.9)";
-	  ctx.shadowBlur = 25;
-	}
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
 
-	ctx.font = '22px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
-	ctx.textAlign = 'center';
-	ctx.textBaseline = 'middle';
-	ctx.fillText(p.avatar, 0, 0);
-	ctx.restore();
+  if (boost){
+    ctx.shadowColor = "rgba(255,50,50,0.9)";
+    ctx.shadowBlur = 25;
+  }
+
+  ctx.font = '22px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(p.avatar, 0, 0);
+  ctx.restore();
 
   // name = IP 
   ctx.font = '12px system-ui';
@@ -207,12 +224,19 @@ function drawHead(p, cam){
   ctx.fillText(`${p.name} (${Math.floor(p.score)})`, x, y-18);
 }
 
+function trailWidth(score){
+  return wBase + Math.floor(score * wGrow);
+}
+function trailKeep(score){
+  return lBase + score * lGrow;
+}
+
 function headRadius(p){
-  return 6 + Math.floor(p.score/5); // gleiche Logik wie trailWidth
+ return trailWidth(p.score) / 2;; // gleiche Logik wie trailWidth
 }
 
 function renderScoreboard(){
   const list = Array.from(players.values()).sort((a,b)=> b.score - a.score).slice(0,10);
-  sb.innerHTML = list.map(p=> `<div class="scoreitem"><span class="name">${esc(p.name)}</span><span>${Math.floor(Math.floor(p.score))</span></div>`).join('');
+  sb.innerHTML = list.map(p=> `<div class="scoreitem"><span class="name">${esc(p.name)}</span><span>${Math.floor(p.score)}</span></div>`).join('');
 }
 function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }

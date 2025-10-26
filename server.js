@@ -78,7 +78,16 @@ for (const server of [httpServer, httpsServer]){
     socket.isAlive = true; socket.on('pong',()=> socket.isAlive=true);
     clients.add(socket);
     const ip = cleanIP(req.socket.remoteAddress);
-    sendWS(socket, JSON.stringify({type:'hello', mapSize: MAP_SIZE, orbs: state.orbs}));
+    sendWS(socket, JSON.stringify({
+	  type:'hello',
+	  mapSize: MAP_SIZE,
+	  orbs: state.orbs,
+	  wBase: cfg.trailWidthBase,
+	  wGrow: cfg.trailWidthGrowth,
+	  lBase: cfg.trailLengthBase,
+	  lGrow: cfg.trailLengthGrowth,
+	  selfKill: cfg.selfHeadKillPercent
+	}));
     socket.on('data', buf=> handleWS(socket, buf, ip));
     socket.on('close', ()=> cleanup(socket));
     socket.on('end', ()=> cleanup(socket));
@@ -120,10 +129,31 @@ function handleWS(socket, buffer, ip){
   if (msg.type==='join' || msg.type==='auto'){
     if (state.players.size>=MAX_PLAYERS){ sendWS(socket, JSON.stringify({type:'reject',reason:'full'})); return; }
     const id = crypto.randomBytes(4).toString('hex');
-    const host = (msg.host || "").trim();
-    const name = host ? `${host} (${ip})` : ip;
-    const avatar = EMOJIS[rand(0, EMOJIS.length-1)];
-    const p = {
+    // random name from config
+	const names = cfg.playerNames || ["Player"];
+	let name;
+
+	// get unique name
+	if (!cfg._usedNames) cfg._usedNames = new Set();
+	let idx = 0;
+	while (idx < names.length) {
+	  const tryName = names[rand(0, names.length-1)];
+	  if (!cfg._usedNames.has(tryName)) {
+		name = tryName;
+		cfg._usedNames.add(tryName);
+		break;
+	  }
+	  idx++;
+	}
+
+	// fallback wenn Namen ausgehen
+	if (!name) {
+	  name = `Player${state.players.size + 1}`;
+	}
+
+	const avatar = EMOJIS[rand(0, EMOJIS.length-1)];
+
+	const p = {
       id, name, avatar, ip,
       x: rand(60, MAP_SIZE-60), y: rand(60, MAP_SIZE-60),
       dir: Math.random()*Math.PI*2, spd: 2.4,
@@ -132,7 +162,18 @@ function handleWS(socket, buffer, ip){
     };
     state.players.set(id, p);
     state.sockets.set(socket, id);
-    sendWS(socket, JSON.stringify({type:'welcome', id, mapSize: MAP_SIZE, players: Array.from(state.players.values()).map(slim), orbs: state.orbs}));
+    sendWS(socket, JSON.stringify({
+	  type:'welcome',
+	  id,
+	  mapSize: MAP_SIZE, 
+	  players: Array.from(state.players.values()).map(slim), 
+	  orbs: state.orbs,
+	  wBase: cfg.trailWidthBase,
+	  wGrow: cfg.trailWidthGrowth,
+	  lBase: cfg.trailLengthBase,
+	  lGrow: cfg.trailLengthGrowth,
+	  selfKill: cfg.selfHeadKillPercent
+	}));
     broadcast({type:'spawn', player: slim(p)});
   }
   else if (msg.type==='input'){
@@ -178,8 +219,16 @@ function die(p){
 }
 
 // Trail helpers
-function trailKeep(score, penalty){ return Math.max(30, 30 + score*2 - (penalty||0)); }
-function trailWidth(score){ return 6 + Math.floor(score/5); }
+function trailKeep(score, penalty){
+  const base = cfg.trailLengthBase || 30;
+  const grow = cfg.trailLengthGrowth || 3;
+  return Math.max(base, base + score * grow - (penalty || 0));
+}
+function trailWidth(score){
+  const base = cfg.trailWidthBase || 6;
+  const grow = cfg.trailWidthGrowth || 0.03;
+  return base + Math.floor(score * grow);
+}
 
 // Angle helpers
 function angleBetween(ax,ay,bx,by,dir){
@@ -205,7 +254,7 @@ setInterval(()=>{
     if (p.boosting){ p.score = Math.max(0, p.score - 0.03); }
 
     // walls
-    if (p.x<HIT_R || p.y<HIT_R || p.x>MAP_SIZE-HIT_R || p.y>MAP_SIZE-HIT_R){
+    if (p.x < trailWidth(p.score)/2 || p.y < trailWidth(p.score)/2 || p.x > MAP_SIZE - trailWidth(p.score)/2 || p.y > MAP_SIZE - trailWidth(p.score)/2){
       if (t >= p.invulnUntil) die(p);
       continue;
     }
@@ -219,7 +268,8 @@ setInterval(()=>{
     let changed = false;
     for (let i=state.orbs.length-1;i>=0;i--){
       const o = state.orbs[i];
-      if (d2xy(p.x,p.y,o.x,o.y) < (HIT_R+6)*(HIT_R+6)){
+	  const rHead = trailWidth(p.score) / 2;
+      if (d2xy(p.x,p.y,o.x,o.y) < (rHead + 6) * (rHead + 6)){
         state.orbs.splice(i,1);
         changed = true;
         if (o.bonus) {
@@ -231,9 +281,6 @@ setInterval(()=>{
     }
     while (state.orbs.length < ORB_COUNT){ state.orbs.push({x:rand(40,MAP_SIZE-40),y:rand(40,MAP_SIZE-40)}); changed = true; }
     if (changed){ broadcast({type:'orbs', orbs: state.orbs, id:p.id, score:p.score}); }
-	if(state.players.size > 0){
-	  broadcast({type:'state', players: Array.from(state.players.values()).map(slim)});
-	}
   }
 
   // collisions
@@ -247,16 +294,19 @@ setInterval(()=>{
       for (let i=0;i<a.trail.length-12;i+=3){
         const pt = a.trail[i];
         const ang = angleBetween(headx, heady, pt.x, pt.y, a.dir);
-        if (ang <= SELF_CONE_DEG/2){
-          if (d2xy(headx,heady,pt.x,pt.y) < (HIT_R + trailWidth(a.score)/2)**2){ die(a); break; }
-        }
+        const killDist = trailWidth(a.score) * (cfg.selfHeadKillPercent || 0.85);
+		if (ang <= SELF_CONE_DEG/2 &&
+			d2xy(headx, heady, pt.x, pt.y) < killDist * killDist) {
+		  die(a); 
+		  break;
+		}
       }
       if (!a.alive) continue;
     }
     // other players: any direction
     for (const b of state.players.values()){
       if (a.id===b.id) continue;
-      const rad = HIT_R + trailWidth(b.score)/2;
+      const rad = trailWidth(a.score)/2 + trailWidth(b.score)/2;
       for (let i=0;i<b.trail.length;i+=3){
         const pt = b.trail[i];
         if (d2xy(headx,heady,pt.x,pt.y) < rad*rad){ die(a); break; }
