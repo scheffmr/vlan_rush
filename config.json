@@ -19,6 +19,7 @@
 	"segmentPerPoint": 3,
 	"segmentOverlap": 0.25,
 	"emojiPx": 22,
+	"renderScale": 1.1,
 	"playerNames": [
 	  "Switch-Sven",
 	  "Router-Ralf",

@@ -19,6 +19,7 @@ const SELF_CONE_DEG = cfg.selfCollisionForwardDeg || 120;
 const INVULN_MS = cfg.respawnInvulnMs || 300;
 const BOOST_PEN_PER_S = cfg.boostPenaltyPerSec || 18;
 const BOOST_REC_PER_S = cfg.boostRecoveryPerSec || 12;
+const renderScale = cfg.renderScale || 4.0;
 
 const EMOJIS = ['🐱','🤖','📦','🖧','💻','🐶','🐭','🚀','🐸','😎'];
 
@@ -28,6 +29,21 @@ const MIME = {
 };
 
 const state = { players: new Map(), sockets: new Map(), orbs: [] };
+
+function makeConfigPacket() {
+  return {
+    wBase: cfg.trailWidthBase,
+    wGrow: cfg.trailWidthGrowth,
+    lBase: cfg.trailLengthBase,
+    lGrow: cfg.trailLengthGrowth,
+    selfKill: cfg.selfHeadKillPercent,
+    segmentPerPoint: cfg.segmentPerPoint,
+    segmentOverlap: cfg.segmentOverlap,
+    emojiPx: cfg.emojiPx,
+    renderScale: renderScale,
+    version: '5.1'
+  };
+}
 
 function rand(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
 function now(){ return Date.now(); }
@@ -105,16 +121,11 @@ for (const server of [httpServer, httpsServer]){
     clients.add(socket);
     const ip = cleanIP(req.socket.remoteAddress);
     sendWS(socket, JSON.stringify({
-	  type:'hello',
-	  mapSize: MAP_SIZE,
-	  orbs: state.orbs,
-	  config: {
-		wBase: cfg.trailWidthBase, wGrow: cfg.trailWidthGrowth,
-		lBase: cfg.trailLengthBase, lGrow: cfg.trailLengthGrowth,
-		selfKill: cfg.selfHeadKillPercent,
-		version: '4.7'
-	  }
-	}));
+	    type:'hello',
+	    mapSize: MAP_SIZE,
+	    orbs: state.orbs,
+	    config: makeConfigPacket()
+	  }));
     socket.on('data', buf=> handleWS(socket, buf, ip));
     socket.on('close', ()=> cleanup(socket));
     socket.on('end', ()=> cleanup(socket));
@@ -190,18 +201,13 @@ function handleWS(socket, buffer, ip){
     state.players.set(id, p);
     state.sockets.set(socket, id);
     sendWS(socket, JSON.stringify({
-	  type:'welcome',
-	  id,
-	  mapSize: MAP_SIZE,
-	  players: Array.from(state.players.values()).map(slim),
-	  orbs: state.orbs,
-	  config: {
-		wBase: cfg.trailWidthBase, wGrow: cfg.trailWidthGrowth,
-		lBase: cfg.trailLengthBase, lGrow: cfg.trailLengthGrowth,
-		selfKill: cfg.selfHeadKillPercent,
-		version: '4.7'
-	  }
-	}));
+      type:'welcome',
+      id,
+      mapSize: MAP_SIZE,
+      players: Array.from(state.players.values()).map(slim),
+      orbs: state.orbs,
+      config: makeConfigPacket()
+    }));
     broadcast({type:'spawn', player: slim(p)});
   }
   else if (msg.type==='input'){
@@ -218,7 +224,19 @@ function handleWS(socket, buffer, ip){
   }
 }
 
-function slim(p){ return {id:p.id,name:p.name,avatar:p.avatar,x:p.x,y:p.y,score:p.score,alive:p.alive,ip:p.ip}; }
+function slim(p){ 
+  return {
+    id:p.id,
+    name:p.name,
+    avatar:p.avatar,
+    x:p.x,
+    y:p.y,
+    score:p.score,
+    alive:p.alive,
+    ip:p.ip,
+    trail: p.trail
+  };
+}
 function respawn(p){
   p.x = rand(60, MAP_SIZE-60); p.y = rand(60, MAP_SIZE-60);
   p.dir = Math.random()*Math.PI*2; p.spd = 2.4; p.score = 0; p.trail.length = 0; p.alive = true;
@@ -369,10 +387,15 @@ for (const a of state.players.values()){
 			avatar: p.avatar,
 			name: p.name,
 			ip: p.ip,
-			boosting: p.boosting   // ✅ Boost-Flag übertragen
+			boosting: p.boosting,
+      hitbox: trailWidth(p.score)
 		});
 	}
-	broadcast({ type:'state', players: snap });
+	broadcast({ 
+    type:'state', 
+    players: snap,
+    config: makeConfigPacket()
+   });
 }, 1000/TICKRATE);
 
 // Heartbeat
