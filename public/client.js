@@ -1,10 +1,16 @@
-// VLAN-Rush V5.4 — server-synced hitbox client
+// VLAN-Rush V5.6 — static background canvas + client perf tweaks
 const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
+const ctx = canvas.getContext("2d", { alpha: true });
 const sb = document.getElementById("scoreboard");
 
-function resize(){ canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
-window.addEventListener("resize", resize); resize();
+function resize(){ 
+  canvas.width = window.innerWidth; 
+  canvas.height = window.innerHeight; 
+  // Hintergrund bei Resize neu generieren (gewünscht)
+  rebuildBackground();
+}
+window.addEventListener("resize", resize); 
+resize();
 
 let ws, myId=null, mapSize=2000;
 let lBase=30, lGrow=3;
@@ -28,8 +34,65 @@ let audioCtx;
 const trailCache = new Map();
 let frameCounter = 0;
 
+// ---------- static background (grid + border) ----------
+let bgCanvas = null;
+let bgCtx = null;
+let bgBuiltFor = { mapSize: null, gridStep: null };
+
+// Step für Grid (gleich wie bisher)
+const GRID_STEP = 100;
+
 
 // ============== FUNKTIONEN ==============
+// ---------- Offscreen-Background-Canvas ----------
+function rebuildBackground(){
+  // Wenn mapSize noch nicht bekannt ist, später erneut versuchen
+  if (!mapSize || mapSize <= 0) return;
+
+  // Neues Offscreen-Canvas anlegen, Größe = gesamte Map
+  if (!bgCanvas) {
+    bgCanvas = document.createElement('canvas');
+    bgCtx = bgCanvas.getContext('2d');
+  }
+  // Nur neu aufbauen, wenn sich relevante Parameter geändert haben
+  if (bgBuiltFor.mapSize === mapSize && bgBuiltFor.gridStep === GRID_STEP) return;
+
+  bgCanvas.width = mapSize;
+  bgCanvas.height = mapSize;
+
+  // Hintergrund füllen (gleich wie Spielfeldfarbe)
+  // (Das Game-Canvas hat #070a15 als Hintergrund – wir zeichnen denselben Farbton, damit es nahtlos ist)
+  bgCtx.save();
+  bgCtx.fillStyle = '#070a15';
+  bgCtx.fillRect(0, 0, mapSize, mapSize);
+  bgCtx.restore();
+
+  // Grid zeichnen
+  bgCtx.save();
+  // dünne, subtile Linien wie im bisherigen Code (globalAlpha ~ 0.12)
+  bgCtx.globalAlpha = 0.12;
+  bgCtx.fillStyle = '#ffffff';
+  // Vertikale Linien
+  for (let x = 0; x < mapSize; x += GRID_STEP) {
+    bgCtx.fillRect(x, 0, 1, mapSize);
+  }
+  // Horizontale Linien
+  for (let y = 0; y < mapSize; y += GRID_STEP) {
+    bgCtx.fillRect(0, y, mapSize, 1);
+  }
+  bgCtx.restore();
+
+  // Border zeichnen (wie bisher)
+  bgCtx.save();
+  bgCtx.strokeStyle = '#4e0a9bff';
+  bgCtx.lineWidth = 1;
+  bgCtx.strokeRect(0.5, 0.5, mapSize - 1, mapSize - 1); // 0.5 für crisp line
+  bgCtx.restore();
+
+  bgBuiltFor = { mapSize, gridStep: GRID_STEP };
+}
+
+
 // ---------- audio ----------
 function playBeep(freq=440, dur=0.08, type="sine"){
   try{
@@ -54,7 +117,6 @@ function createEmojiSprite(emoji, size = emojiPx) {
   ctx2.fillText(emoji, size, size);
   return c;
 }
-
 function ensureSprite(emoji, size = emojiPx) {
   const key = `${emoji}_${size}`;
   if (!emojiSprites.has(key)) {
@@ -89,7 +151,8 @@ function onMessage(ev){
   const msg = JSON.parse(ev.data);
 
   if (msg.type==='hello' || msg.type==='welcome'){
-    mapSize = msg.mapSize; orbs = msg.orbs || [];
+    mapSize = msg.mapSize; 
+    orbs = msg.orbs || [];
     if (msg.players){
       msg.players.forEach(p => {
         players.set(p.id, {
@@ -102,6 +165,9 @@ function onMessage(ev){
     }
     if (msg.config) applyConfig(msg.config);
     if (msg.id) myId = msg.id;
+
+    // sobald mapSize bekannt ist, Hintergrund erzeugen
+    rebuildBackground();
   }
   else if (msg.type==='spawn'){
     players.set(msg.player.id, {...msg.player, trail: Array.isArray(msg.player.trail)? msg.player.trail.slice():[]});
@@ -122,6 +188,9 @@ function onMessage(ev){
     players.clear();
     msg.players.forEach(p=> players.set(p.id, {...p, trail: Array.isArray(p.trail)? p.trail.slice():[] }));
     orbs = msg.orbs || [];
+    // Map könnte sich geändert haben — sicherheitshalber neu bauen
+    if (typeof msg.mapSize === 'number') mapSize = msg.mapSize;
+    rebuildBackground();
   }
   else if (msg.type==='state'){
     if (msg.config) applyConfig(msg.config);
@@ -145,7 +214,6 @@ function onMessage(ev){
     msg.players.forEach(s => {
       let p = players.get(s.id);
       if (!p) {
-        // Fallback: wenn wir den Spieler noch nicht kennen, lege ihn minimal an.
         p = { id:s.id, name:'?', avatar:'❓', trail:[], alive:true, score:0 };
         players.set(s.id, p);
       }
@@ -154,7 +222,6 @@ function onMessage(ev){
       p.boosting = !!s.boosting;
       p.hitbox = s.hitbox;
 
-      // Trail fortschreiben (wie bisher bei 'state')
       if (p.alive){
         p.trail.push({x:s.x, y:s.y, t:performance.now(), score:s.score});
         const keep = Math.max(lBase, lBase + s.score * lGrow);
@@ -211,9 +278,18 @@ function camera(){
 function draw(){
   const w = canvas.width, h = canvas.height;
   const cam = camera();
-  ctx.clearRect(0,0,w,h);
 
-  // sichtbarer Bereich +15 % Rand
+  // 1) Hintergrund als Ausschnitt des Offscreen-Canvas zeichnen
+  if (bgCanvas) {
+    // Quelle: cam.x, cam.y, w, h | Ziel: 0,0,w,h
+    ctx.drawImage(bgCanvas, cam.x, cam.y, w, h, 0, 0, w, h);
+  } else {
+    // Fallback (sollte nicht oft passieren)
+    ctx.fillStyle = '#070a15';
+    ctx.fillRect(0,0,w,h);
+  }
+
+  // sichtbarer Weltbereich +15 % Rand für Culling
   const margin = 0.15;
   const viewW = w * (1 + margin);
   const viewH = h * (1 + margin);
@@ -222,21 +298,7 @@ function draw(){
   const vx2 = cam.x + viewW;
   const vy2 = cam.y + viewH;
 
-  // grid
-  ctx.globalAlpha = 0.12;
-  for (let x=0;x<mapSize;x+=100) {
-    if (x > vx1 && x < vx2) ctx.fillRect(x-cam.x, -cam.y, 1, mapSize);
-  }
-  for (let y=0;y<mapSize;y+=100) {
-    if (y > vy1 && y < vy2) ctx.fillRect(-cam.x, y-cam.y, mapSize, 1);
-  }
-  ctx.globalAlpha = 1;
-
-  // border
-  ctx.strokeStyle = '#4e0a9bff';
-  ctx.strokeRect(-cam.x, -cam.y, mapSize, mapSize);
-
-  // --- Orbs zeichnen (nur sichtbare) ---
+  // --- Orbs (nur sichtbare) ---
   for (const o of orbs){
     if (o.x < vx1 || o.x > vx2 || o.y < vy1 || o.y > vy2) continue;
     ctx.fillStyle = 'rgba(122,162,247,0.22)';
@@ -249,6 +311,7 @@ function draw(){
   frameCounter++;
   for (const p of players.values()){
     if (!p.alive || !p.trail || p.trail.length < 2) continue;
+
     // Kopfposition prüfen – außerhalb? Trail ggf. überspringen
     if (p.x < vx1 || p.x > vx2 || p.y < vy1 || p.y > vy2) {
       const last = p.trail[p.trail.length - 1];
@@ -279,7 +342,6 @@ function draw(){
           const x = a.x + (b.x - a.x) * t;
           const y = a.y + (b.y - a.y) * t;
           const dir = Math.atan2(a.y - b.y, a.x - b.x);
-          // Nur sichtbare Segmente übernehmen
           if (x > vx1 && x < vx2 && y > vy1 && y < vy2)
             pts.push({ x, y, dir });
           need += spacing;
@@ -308,7 +370,7 @@ function draw(){
       ctx.restore();
     }
 
-    // Kopf zeichnen (wenn sichtbar)
+    // Kopf
     if (p.x > vx1 && p.x < vx2 && p.y > vy1 && p.y < vy2) {
       let dir = 0;
       if (p.trail.length >= 2){
@@ -334,16 +396,12 @@ function draw(){
   renderScoreboard();
 }
 
-
 // ---------- scoreboard ----------
 function renderScoreboard() {
   if (!sb) return;
   const now = performance.now();
 
-  // nur alle 500ms aktualisieren
-  if (now - lastScoreRender < 500) {
-    return; // innerhalb des Intervalls – kein Update nötig
-  }
+  if (now - lastScoreRender < 500) return;
   lastScoreRender = now;
 
   const list = Array.from(players.values())
@@ -361,10 +419,10 @@ function renderScoreboard() {
     html = `<div class="score-title">Punkte</div>${rows}`;
   }
 
-  // Nur neu schreiben, wenn sich der Inhalt tatsächlich geändert hat
   if (html !== lastScoreHTML) {
     sb.innerHTML = html;
     lastScoreHTML = html;
   }
 }
+
 function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
