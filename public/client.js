@@ -1,4 +1,4 @@
-// VLAN-Rush V5.5 — static background canvas + client perf tweaks
+// VLAN-Rush V5.5 — static background canvas + client perf tweaks 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d", { alpha: true });
 const sb = document.getElementById("scoreboard");

@@ -1,4 +1,4 @@
-// VLAN-Rush V5.5 — delta updates, periodic snapshots
+// VLAN-Rush V5.5 — delta updates, periodic snapshots 
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
