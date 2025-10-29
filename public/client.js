@@ -186,144 +186,131 @@ function camera(){
 
 // ---------- draw ----------
 function draw(){
-  const w=canvas.width, h=canvas.height;
+  const w = canvas.width, h = canvas.height;
   const cam = camera();
   ctx.clearRect(0,0,w,h);
 
+  // sichtbarer Bereich +15 % Rand
+  const margin = 0.15;
+  const viewW = w * (1 + margin);
+  const viewH = h * (1 + margin);
+  const vx1 = cam.x - w * margin * 0.5;
+  const vy1 = cam.y - h * margin * 0.5;
+  const vx2 = cam.x + viewW;
+  const vy2 = cam.y + viewH;
+
   // grid
   ctx.globalAlpha = 0.12;
-  for (let x=0;x<mapSize;x+=100) ctx.fillRect(x-cam.x, -cam.y, 1, mapSize);
-  for (let y=0;y<mapSize;y+=100) ctx.fillRect(-cam.x, y-cam.y, mapSize, 1);
+  for (let x=0;x<mapSize;x+=100) {
+    if (x > vx1 && x < vx2) ctx.fillRect(x-cam.x, -cam.y, 1, mapSize);
+  }
+  for (let y=0;y<mapSize;y+=100) {
+    if (y > vy1 && y < vy2) ctx.fillRect(-cam.x, y-cam.y, mapSize, 1);
+  }
   ctx.globalAlpha = 1;
 
   // border
   ctx.strokeStyle = '#4e0a9bff';
   ctx.strokeRect(-cam.x, -cam.y, mapSize, mapSize);
 
-  // orbs
-  orbs.forEach(o=>{
+  // --- Orbs zeichnen (nur sichtbare) ---
+  for (const o of orbs){
+    if (o.x < vx1 || o.x > vx2 || o.y < vy1 || o.y > vy2) continue;
     ctx.fillStyle = 'rgba(122,162,247,0.22)';
     ctx.beginPath(); ctx.arc(o.x-cam.x, o.y-cam.y, 12, 0, Math.PI*2); ctx.fill();
     ctx.fillStyle = o.bonus ? '#FFD700' : '#7aa2f7';
     ctx.beginPath(); ctx.arc(o.x-cam.x, o.y-cam.y, 6, 0, Math.PI*2); ctx.fill();
-  });
+  }
 
-  // segments (emoji chain)
+  // --- Spieler & Trails ---
+  frameCounter++;
   for (const p of players.values()){
     if (!p.alive || !p.trail || p.trail.length < 2) continue;
+    // Kopfposition prüfen – außerhalb? Trail ggf. überspringen
+    if (p.x < vx1 || p.x > vx2 || p.y < vy1 || p.y > vy2) {
+      const last = p.trail[p.trail.length - 1];
+      if (last.x < vx1 || last.x > vx2 || last.y < vy1 || last.y > vy2) continue;
+    }
 
     const count = Math.max(0, Math.floor(p.score / segmentPerPoint));
     if (count <= 0) continue;
-
     const overlap = Math.min(0.9, Math.max(0, segmentOverlap));
     const spacing = (p.hitbox || emojiPx) * (1 - overlap);
+    const segSize = (p.hitbox || emojiPx);
 
-    const pts=[]; let need=spacing;
-    frameCounter++;
+    // Trail-Cache verwenden
+    let cache = trailCache.get(p.id);
+    if (!cache) cache = { pts: [], lastFrame: 0 };
+    const shouldRecalc = (frameCounter - cache.lastFrame) > 3;
+    let pts;
 
-    for (const p of players.values()) {
-      if (!p.alive || !p.trail || p.trail.length < 2) continue;
-
-      const count = Math.max(0, Math.floor(p.score / segmentPerPoint));
-      if (count <= 0) continue;
-
-      const overlap = Math.min(0.9, Math.max(0, segmentOverlap));
-      const spacing = (p.hitbox || emojiPx) * (1 - overlap);
-      const segSize = (p.hitbox || emojiPx);
-
-      // Cache holen oder erstellen
-      let cache = trailCache.get(p.id);
-      if (!cache) cache = { pts: [], lastFrame: 0 };
-      const shouldRecalc = (frameCounter - cache.lastFrame) > 3; // alle ~3-4 Frames
-
-      let pts;
-      if (shouldRecalc) {
-        pts = [];
-        let need = spacing;
-        for (let i = p.trail.length - 1; i > 0 && pts.length < count; i--) {
-          const a = p.trail[i], b = p.trail[i - 1];
-          const dx = a.x - b.x, dy = a.y - b.y;
-          const segLen = Math.hypot(dx, dy); if (segLen <= 0) continue;
-          while (need <= segLen && pts.length < count) {
-            const t = 1 - (need / segLen);
-            const x = a.x + (b.x - a.x) * t;
-            const y = a.y + (b.y - a.y) * t;
-            const dir = Math.atan2(a.y - b.y, a.x - b.x);
+    if (shouldRecalc) {
+      pts = [];
+      let need = spacing;
+      for (let i = p.trail.length - 1; i > 0 && pts.length < count; i--) {
+        const a = p.trail[i], b = p.trail[i - 1];
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const segLen = Math.hypot(dx, dy); if (segLen <= 0) continue;
+        while (need <= segLen && pts.length < count) {
+          const t = 1 - (need / segLen);
+          const x = a.x + (b.x - a.x) * t;
+          const y = a.y + (b.y - a.y) * t;
+          const dir = Math.atan2(a.y - b.y, a.x - b.x);
+          // Nur sichtbare Segmente übernehmen
+          if (x > vx1 && x < vx2 && y > vy1 && y < vy2)
             pts.push({ x, y, dir });
-            need += spacing;
-          }
-          need -= segLen;
+          need += spacing;
         }
-        cache.pts = pts;
-        cache.lastFrame = frameCounter;
-      } else {
-        pts = cache.pts.slice(); // vorhandene Punkte nutzen
-        // Kopfposition leicht aktualisieren (neuer Head)
-        if (pts.length > 0) {
-          const last = pts[0];
-          const head = p.trail[p.trail.length - 1];
-          last.x = head.x; last.y = head.y;
-        }
+        need -= segLen;
       }
-      trailCache.set(p.id, cache);
-
-      // Zeichnen
-      const sprite = ensureSprite(p.avatar, segSize);
-      for (let i = pts.length - 1; i >= 0; i--) {
-        const s = pts[i];
-        const sx = s.x - cam.x, sy = s.y - cam.y;
-        ctx.save();
-        ctx.translate(sx, sy);
-        ctx.rotate(s.dir);
-        ctx.drawImage(sprite, -segSize / 2, -segSize / 2, segSize, segSize);
-        ctx.restore();
+      cache.pts = pts;
+      cache.lastFrame = frameCounter;
+    } else {
+      pts = cache.pts.slice();
+      if (pts.length > 0) {
+        const head = p.trail[p.trail.length - 1];
+        pts[0].x = head.x; pts[0].y = head.y;
       }
     }
+    trailCache.set(p.id, cache);
 
-    const segSize = (p.hitbox || emojiPx);
-    const font = `${segSize}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"`;
-    for (let i=pts.length-1; i>=0; i--){
-      const s=pts[i];
+    const sprite = ensureSprite(p.avatar, segSize);
+    for (let i = pts.length - 1; i >= 0; i--) {
+      const s = pts[i];
       const sx = s.x - cam.x, sy = s.y - cam.y;
       ctx.save();
       ctx.translate(sx, sy);
       ctx.rotate(s.dir);
-      ctx.font = font; ctx.textAlign='center'; ctx.textBaseline='middle';
-      const sprite = ensureSprite(p.avatar, segSize);
-      ctx.drawImage(sprite, -segSize/2, -segSize/2, segSize, segSize);
+      ctx.drawImage(sprite, -segSize / 2, -segSize / 2, segSize, segSize);
       ctx.restore();
     }
-  }
 
-  // heads
-  for (const p of players.values()){
-    if (!p.alive) continue;
-    let dir = 0;
-    if (p.trail && p.trail.length>=2){
-      const a=p.trail[p.trail.length-1], b=p.trail[p.trail.length-2];
-      dir = Math.atan2(a.y-b.y, a.x-b.x);
+    // Kopf zeichnen (wenn sichtbar)
+    if (p.x > vx1 && p.x < vx2 && p.y > vy1 && p.y < vy2) {
+      let dir = 0;
+      if (p.trail.length >= 2){
+        const a=p.trail[p.trail.length-1], b=p.trail[p.trail.length-2];
+        dir = Math.atan2(a.y-b.y, a.x-b.x);
+      }
+      const x = p.x - cam.x, y = p.y - cam.y;
+      ctx.save();
+      ctx.translate(x,y);
+      ctx.rotate(dir);
+      if (p.boosting){ ctx.shadowColor="rgba(255,50,50,0.9)"; ctx.shadowBlur=20; }
+      const spriteHead = ensureSprite(p.avatar, segSize);
+      ctx.drawImage(spriteHead, -segSize/2, -segSize/2, segSize, segSize);
+      ctx.restore();
+
+      ctx.font = '12px system-ui';
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${p.name} (${Math.floor(p.score)})`, x, y - segSize * 0.6);
     }
-    const x = p.x - cam.x, y = p.y - cam.y;
-    const headSize = (p.hitbox || emojiPx);
-
-    ctx.save();
-    ctx.translate(x,y);
-    ctx.rotate(dir);
-    if (p.boosting){ ctx.shadowColor="rgba(255,50,50,0.9)"; ctx.shadowBlur=20; }
-    ctx.font = `${headSize}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"`;
-    ctx.textAlign='center'; ctx.textBaseline='middle';
-    const sprite = ensureSprite(p.avatar, headSize);
-    ctx.drawImage(sprite, -headSize/2, -headSize/2, headSize, headSize);
-    ctx.restore();
-
-    ctx.font = '12px system-ui';
-    ctx.fillStyle = '#fff';
-    ctx.textAlign = 'center';
-    ctx.fillText(`${p.name} (${Math.floor(p.score)})`, x, y - headSize * 0.6);
   }
 
   renderScoreboard();
 }
+
 
 // ---------- scoreboard ----------
 function renderScoreboard() {
