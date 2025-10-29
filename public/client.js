@@ -18,8 +18,16 @@ let pulse = 0;
 let lastScoreRender = 0;
 let lastScoreHTML = '';
 
+// ---------- sprite cache ----------
+const emojiSprites = new Map();
+
 // ---------- audio ----------
 let audioCtx;
+
+
+
+// ============== FUNKTIONEN ==============
+// ---------- audio ----------
 function playBeep(freq=440, dur=0.08, type="sine"){
   try{
     if (!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
@@ -29,6 +37,27 @@ function playBeep(freq=440, dur=0.08, type="sine"){
     g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
     o.start(); o.stop(audioCtx.currentTime + dur);
   }catch(e){}
+}
+
+// ---------- sprite cache ----------
+function createEmojiSprite(emoji, size = emojiPx) {
+  const c = document.createElement('canvas');
+  c.width = size * 2;
+  c.height = size * 2;
+  const ctx2 = c.getContext('2d');
+  ctx2.font = `${size}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"`;
+  ctx2.textAlign = 'center';
+  ctx2.textBaseline = 'middle';
+  ctx2.fillText(emoji, size, size);
+  return c;
+}
+
+function ensureSprite(emoji, size = emojiPx) {
+  const key = `${emoji}_${size}`;
+  if (!emojiSprites.has(key)) {
+    emojiSprites.set(key, createEmojiSprite(emoji, size));
+  }
+  return emojiSprites.get(key);
 }
 
 // ---------- websocket ----------
@@ -211,7 +240,8 @@ function draw(){
       ctx.translate(sx, sy);
       ctx.rotate(s.dir);
       ctx.font = font; ctx.textAlign='center'; ctx.textBaseline='middle';
-      ctx.fillText(p.avatar, 0, 0);
+      const sprite = ensureSprite(p.avatar, segSize);
+      ctx.drawImage(sprite, -segSize/2, -segSize/2, segSize, segSize);
       ctx.restore();
     }
   }
@@ -233,7 +263,8 @@ function draw(){
     if (p.boosting){ ctx.shadowColor="rgba(255,50,50,0.9)"; ctx.shadowBlur=20; }
     ctx.font = `${headSize}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.fillText(p.avatar, 0, 0);
+    const sprite = ensureSprite(p.avatar, headSize);
+    ctx.drawImage(sprite, -headSize/2, -headSize/2, headSize, headSize);
     ctx.restore();
 
     ctx.font = '12px system-ui';
