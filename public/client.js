@@ -141,6 +141,29 @@ function onMessage(ev){
       }
     });
   }
+  else if (msg.type === 'delta') {
+    msg.players.forEach(s => {
+      let p = players.get(s.id);
+      if (!p) {
+        // Fallback: wenn wir den Spieler noch nicht kennen, lege ihn minimal an.
+        p = { id:s.id, name:'?', avatar:'❓', trail:[], alive:true, score:0 };
+        players.set(s.id, p);
+      }
+      p.x = s.x; p.y = s.y;
+      p.score = s.score; p.alive = s.alive;
+      p.boosting = !!s.boosting;
+      p.hitbox = s.hitbox;
+
+      // Trail fortschreiben (wie bisher bei 'state')
+      if (p.alive){
+        p.trail.push({x:s.x, y:s.y, t:performance.now(), score:s.score});
+        const keep = Math.max(lBase, lBase + s.score * lGrow);
+        if (p.trail.length > keep) p.trail.splice(0, p.trail.length - keep);
+      } else {
+        p.trail.length = 0;
+      }
+    });
+  }
 }
 
 // ---------- input ----------

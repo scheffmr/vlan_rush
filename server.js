@@ -1,4 +1,4 @@
-// VLAN-Rush V5.4 — emoji segments, server-synced hitbox, spawn-fix
+// VLAN-Rush V5.5 — delta updates, periodic snapshots
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
@@ -62,7 +62,7 @@ function makeConfigPacket(){
     segmentPerPoint: cfg.segmentPerPoint,
     segmentOverlap: cfg.segmentOverlap,
     emojiPx: cfg.emojiPx,
-    version: '5.4'
+    version: '5.5' // bumped
   };
 }
 
@@ -124,6 +124,7 @@ function sendWS(socket, dataStr){
   try{ socket.write(Buffer.concat([header,data])); }catch(e){}
 }
 function broadcast(obj){ const s = JSON.stringify(obj); for(const c of clients) sendWS(c,s); }
+function sendTo(socket, obj){ sendWS(socket, JSON.stringify(obj)); }
 function cleanup(socket){
   if (!clients.has(socket)) return;
   const id = state.sockets.get(socket);
@@ -140,6 +141,37 @@ function parseWS(buf){
   return {op, text: payload.toString('utf8')};
 }
 
+// [DELTA] Last-sent cache & snapshot pacing
+const lastSent = new Map();                 // id -> {x,y,score,alive,boosting,hitbox}
+const SNAPSHOT_MS = 1000;                   // periodic resync
+let lastSnapshotAt = 0;
+
+function slim(p){
+  return {
+    id: p.id, name: p.name, avatar: p.avatar,
+    x: p.x, y: p.y, score: p.score, alive: p.alive, ip: p.ip,
+    trail: p.trail
+  };
+}
+function liveMini(p){
+  // nur Felder senden, die sich oft ändern
+  return {
+    id: p.id,
+    x: Math.round(p.x*100)/100,  // leichte Quantisierung reduziert Churn
+    y: Math.round(p.y*100)/100,
+    score: p.score|0,
+    alive: !!p.alive,
+    boosting: !!p.boosting,
+    hitbox: trailWidth(p.score)
+  };
+}
+function equalMini(a,b){
+  return a && b &&
+    a.x===b.x && a.y===b.y &&
+    a.score===b.score && a.alive===b.alive &&
+    a.boosting===b.boosting && a.hitbox===b.hitbox;
+}
+
 function attachWS(server){
   server.on('upgrade', (req, socket, head)=>{
     if (req.headers['upgrade'] !== 'websocket'){ socket.destroy(); return; }
@@ -151,7 +183,15 @@ function attachWS(server){
     socket.isAlive = true; socket.on('pong',()=> socket.isAlive=true);
     clients.add(socket);
     const ip = cleanIP(req.socket.remoteAddress);
-    sendWS(socket, JSON.stringify({type:'hello', mapSize: MAP_SIZE, orbs: state.orbs, config: makeConfigPacket()}));
+
+    // [DELTA] Hello + sofortiger kompakter Snapshot für Zuschauer/Scoreboard
+    const snap = Array.from(state.players.values()).map(p => ({
+      id: p.id, x: p.x, y: p.y, score: p.score, alive: p.alive,
+      avatar: p.avatar, name: p.name, ip: p.ip, boosting: p.boosting,
+      hitbox: trailWidth(p.score)
+    }));
+    sendTo(socket, {type:'hello', mapSize: MAP_SIZE, orbs: state.orbs, config: makeConfigPacket(), players: snap});
+
     socket.on('data', buf=> handleWS(socket, buf, ip));
     socket.on('close', ()=> cleanup(socket));
     socket.on('end', ()=> cleanup(socket));
@@ -168,7 +208,7 @@ function handleWS(socket, buffer, ip){
   let msg; try{ msg = JSON.parse(fr.text); }catch(e){ return; }
 
   if (msg.type==='join' || msg.type==='auto'){
-    if (state.players.size>=MAX_PLAYERS){ sendWS(socket, JSON.stringify({type:'reject',reason:'full'})); return; }
+    if (state.players.size>=MAX_PLAYERS){ sendTo(socket, {type:'reject',reason:'full'}); return; }
     const id = crypto.randomBytes(4).toString('hex');
 
     // unique random name from config
@@ -193,13 +233,16 @@ function handleWS(socket, buffer, ip){
     state.players.set(id, p);
     state.sockets.set(socket, id);
 
-    sendWS(socket, JSON.stringify({
+    sendTo(socket, {
       type:'welcome',
       id, mapSize: MAP_SIZE,
       players: Array.from(state.players.values()).map(slim),
       orbs: state.orbs,
       config: makeConfigPacket()
-    }));
+    });
+
+    // [DELTA] spawn-Event bleibt, lastSent init zurücksetzen
+    lastSent.delete(id);
     broadcast({type:'spawn', player: slim(p)});
   }
   else if (msg.type==='input'){
@@ -211,24 +254,18 @@ function handleWS(socket, buffer, ip){
   }
   else if (msg.type==='admin' && msg.action==='reset'){
     state.orbs = []; spawnOrbs(ORB_COUNT);
-    for (const p of state.players.values()){ respawn(p); }
+    for (const p of state.players.values()){ respawn(p); lastSent.delete(p.id); }
     broadcast({type:'reset', orbs: state.orbs, players: Array.from(state.players.values()).map(slim)});
   }
 }
 
-function slim(p){
-  return {
-    id: p.id, name: p.name, avatar: p.avatar,
-    x: p.x, y: p.y, score: p.score, alive: p.alive, ip: p.ip,
-    trail: p.trail
-  };
-}
 function respawn(p){
   p.x = rand(60, MAP_SIZE-60); p.y = rand(60, MAP_SIZE-60);
   p.dir = Math.random()*Math.PI*2; p.spd = 2.4; p.score = 0;
   p.trail.length = 0; p.alive = true;
   p.deadUntil = 0; p.invulnUntil = now() + INVULN_MS;
   p.boostPenalty = 0;
+  lastSent.delete(p.id); // [DELTA] erzwinge vollständiges Mini beim nächsten Tick
 }
 function die(p){
   if (!p.alive) return;
@@ -248,9 +285,10 @@ function die(p){
 // ---------- Tick ----------
 setInterval(()=>{
   const t = now();
+
   for (const p of state.players.values()){
     if (!p.alive){
-      if (t>=p.deadUntil){ respawn(p); broadcast({type:'spawn', player: slim(p)}); }
+      if (t>=p.deadUntil){ respawn(p); broadcast({type:'spawn', player: {id:p.id, name:p.name, avatar:p.avatar, x:p.x,y:p.y,score:p.score,alive:p.alive, ip:p.ip, trail:p.trail}}); }
       continue;
     }
 
@@ -310,20 +348,36 @@ setInterval(()=>{
     }
   }
 
-  const snap = [];
+  // [DELTA] nur geänderte Spieler senden
+  const deltas = [];
   for (const p of state.players.values()){
-    snap.push({
+    const mini = liveMini(p);
+    const prev = lastSent.get(p.id);
+    if (!equalMini(mini, prev)){
+      deltas.push(mini);
+      lastSent.set(p.id, mini);
+    }
+  }
+  if (deltas.length){
+    broadcast({ type:'delta', players: deltas });
+  }
+
+  // [DELTA] periodischer kompakter Snapshot (Scoreboard/Resync)
+  const nowMs = now();
+  if (nowMs - lastSnapshotAt >= SNAPSHOT_MS){
+    lastSnapshotAt = nowMs;
+    const snap = Array.from(state.players.values()).map(p => ({
       id: p.id, x: p.x, y: p.y, score: p.score, alive: p.alive,
       avatar: p.avatar, name: p.name, ip: p.ip, boosting: p.boosting,
       hitbox: trailWidth(p.score)
-    });
+    }));
+    broadcast({ type:'state', players: snap, config: makeConfigPacket() });
   }
-  broadcast({ type:'state', players: snap, config: makeConfigPacket() });
 }, 1000/TICKRATE);
 
 // Heartbeat
 setInterval(()=>{ for (const s of clients){ try{ const ping=Buffer.from([0x89,0x00]); s.write(ping); }catch(e){} } }, 15000);
 
 // Listen
-httpServer.listen(HTTP_PORT,'0.0.0.0', ()=> console.log(`[VLAN-RUSH V5.4] HTTP on ${HTTP_PORT}`));
-if (httpsServer) httpsServer.listen(HTTPS_PORT,'0.0.0.0', ()=> console.log(`[VLAN-RUSH V5.4] HTTPS on ${HTTPS_PORT}`));
+httpServer.listen(HTTP_PORT,'0.0.0.0', ()=> console.log(`[VLAN-RUSH V5.5] HTTP on ${HTTP_PORT}`));
+if (httpsServer) httpsServer.listen(HTTPS_PORT,'0.0.0.0', ()=> console.log(`[VLAN-RUSH V5.5] HTTPS on ${HTTPS_PORT}`));
