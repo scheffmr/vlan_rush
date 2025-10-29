@@ -20,9 +20,10 @@ const emojiPx = cfg.emojiPx ?? 22;
 
 // growth helpers (authoritative on server)
 function trailWidth(score){
-  const base = Math.max(emojiPx,(cfg.trailWidthBase ?? 6));
-  const grow = (cfg.trailWidthGrowth ?? 0.03);
-  return base + Math.floor(score * grow);
+  const base = Math.max(cfg.trailWidthBase ?? 6, emojiPx);
+  const grow = cfg.trailWidthGrowth ?? 0.03;
+  const w = base + Math.floor(score * grow);
+  return Math.max(w, emojiPx); 
 }
 function trailKeep(score, penalty){
   const base = (cfg.trailLengthBase ?? 30);
@@ -70,7 +71,7 @@ function makeConfigPacket(){
 const state = { players: new Map(), sockets: new Map(), orbs: [] };
 const EMOJIS = ['🐱','🐶','🐭','🐹','🐰','🐻','🐼','🐸','🦊',
   '🐯','🐨','🐷','🐮','🐔','🐤','🐧','🦉','🐙',
-  '💻','📦','🔌','🧠','💡','🧩','🛰️',
+  '💻','📦','🧠','💡','🧩','🛰️',
   '😎','🤖','👾','🧑','🎮','🧱','⚙️'];
 
 function spawnOrbs(n){

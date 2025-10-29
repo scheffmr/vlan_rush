@@ -1,16 +1,7 @@
-// VLAN-Rush V5.6 — static background canvas + client perf tweaks
+// VLAN-Rush V5.5 — static background canvas + client perf tweaks
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d", { alpha: true });
 const sb = document.getElementById("scoreboard");
-
-function resize(){ 
-  canvas.width = window.innerWidth; 
-  canvas.height = window.innerHeight; 
-  // Hintergrund bei Resize neu generieren (gewünscht)
-  rebuildBackground();
-}
-window.addEventListener("resize", resize); 
-resize();
 
 let ws, myId=null, mapSize=2000;
 let lBase=30, lGrow=3;
@@ -322,7 +313,7 @@ function draw(){
     if (count <= 0) continue;
     const overlap = Math.min(0.9, Math.max(0, segmentOverlap));
     const spacing = (p.hitbox || emojiPx) * (1 - overlap);
-    const segSize = (p.hitbox || emojiPx);
+    const segSize = Math.max(p.hitbox || emojiPx, emojiPx);
 
     // Trail-Cache verwenden
     let cache = trailCache.get(p.id);
@@ -426,3 +417,14 @@ function renderScoreboard() {
 }
 
 function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+
+// ============== EVENT LISTENER ==============
+function resize(){ 
+  canvas.width = window.innerWidth; 
+  canvas.height = window.innerHeight; 
+  // Hintergrund bei Resize neu generieren (gewünscht)
+  rebuildBackground();
+}
+window.addEventListener("resize", resize); 
+resize();
