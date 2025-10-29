@@ -24,6 +24,9 @@ const emojiSprites = new Map();
 // ---------- audio ----------
 let audioCtx;
 
+// ---------- Caching-System ----------
+const trailCache = new Map();
+let frameCounter = 0;
 
 
 // ============== FUNKTIONEN ==============
@@ -216,19 +219,65 @@ function draw(){
     const spacing = (p.hitbox || emojiPx) * (1 - overlap);
 
     const pts=[]; let need=spacing;
-    for (let i=p.trail.length-1; i>0 && pts.length<count; i--){
-      const a=p.trail[i], b=p.trail[i-1];
-      const dx=a.x-b.x, dy=a.y-b.y;
-      const segLen = Math.hypot(dx,dy); if (segLen<=0) continue;
-      while(need<=segLen && pts.length<count){
-        const t = 1 - (need/segLen);
-        const x = a.x + (b.x-a.x)*t;
-        const y = a.y + (b.y-a.y)*t;
-        const dir = Math.atan2(a.y-b.y, a.x-b.x);
-        pts.push({x,y,dir});
-        need += spacing;
+    frameCounter++;
+
+    for (const p of players.values()) {
+      if (!p.alive || !p.trail || p.trail.length < 2) continue;
+
+      const count = Math.max(0, Math.floor(p.score / segmentPerPoint));
+      if (count <= 0) continue;
+
+      const overlap = Math.min(0.9, Math.max(0, segmentOverlap));
+      const spacing = (p.hitbox || emojiPx) * (1 - overlap);
+      const segSize = (p.hitbox || emojiPx);
+
+      // Cache holen oder erstellen
+      let cache = trailCache.get(p.id);
+      if (!cache) cache = { pts: [], lastFrame: 0 };
+      const shouldRecalc = (frameCounter - cache.lastFrame) > 3; // alle ~3-4 Frames
+
+      let pts;
+      if (shouldRecalc) {
+        pts = [];
+        let need = spacing;
+        for (let i = p.trail.length - 1; i > 0 && pts.length < count; i--) {
+          const a = p.trail[i], b = p.trail[i - 1];
+          const dx = a.x - b.x, dy = a.y - b.y;
+          const segLen = Math.hypot(dx, dy); if (segLen <= 0) continue;
+          while (need <= segLen && pts.length < count) {
+            const t = 1 - (need / segLen);
+            const x = a.x + (b.x - a.x) * t;
+            const y = a.y + (b.y - a.y) * t;
+            const dir = Math.atan2(a.y - b.y, a.x - b.x);
+            pts.push({ x, y, dir });
+            need += spacing;
+          }
+          need -= segLen;
+        }
+        cache.pts = pts;
+        cache.lastFrame = frameCounter;
+      } else {
+        pts = cache.pts.slice(); // vorhandene Punkte nutzen
+        // Kopfposition leicht aktualisieren (neuer Head)
+        if (pts.length > 0) {
+          const last = pts[0];
+          const head = p.trail[p.trail.length - 1];
+          last.x = head.x; last.y = head.y;
+        }
       }
-      need -= segLen;
+      trailCache.set(p.id, cache);
+
+      // Zeichnen
+      const sprite = ensureSprite(p.avatar, segSize);
+      for (let i = pts.length - 1; i >= 0; i--) {
+        const s = pts[i];
+        const sx = s.x - cam.x, sy = s.y - cam.y;
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(s.dir);
+        ctx.drawImage(sprite, -segSize / 2, -segSize / 2, segSize, segSize);
+        ctx.restore();
+      }
     }
 
     const segSize = (p.hitbox || emojiPx);
