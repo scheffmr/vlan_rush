@@ -20,10 +20,10 @@ const emojiPx = cfg.emojiPx ?? 22;
 
 // growth helpers (authoritative on server)
 function trailWidth(score){
-  const base = Math.max(cfg.trailWidthBase ?? 6, emojiPx);
+  const base = cfg.trailWidthBase ?? 6;
   const grow = cfg.trailWidthGrowth ?? 0.03;
   const w = base + Math.floor(score * grow);
-  return Math.max(w, emojiPx); 
+  return Math.max(w, emojiPx);
 }
 function trailKeep(score, penalty){
   const base = (cfg.trailLengthBase ?? 30);
@@ -158,12 +158,12 @@ function liveMini(p){
   // nur Felder senden, die sich oft ändern
   return {
     id: p.id,
-    x: Math.round(p.x*100)/100,  // leichte Quantisierung reduziert Churn
+    x: Math.round(p.x*100)/100,
     y: Math.round(p.y*100)/100,
     score: p.score|0,
     alive: !!p.alive,
     boosting: !!p.boosting,
-    hitbox: trailWidth(p.score)
+    hitbox: Math.max(trailWidth(p.score), Math.max(emojiPx, 32))
   };
 }
 function equalMini(a,b){
@@ -229,7 +229,9 @@ function handleWS(socket, buffer, ip){
       x: rand(60, MAP_SIZE-60), y: rand(60, MAP_SIZE-60),
       dir: Math.random()*Math.PI*2, spd: 2.4,
       score: 0, alive: true, deadUntil: 0,
-      trail: [], invulnUntil: now() + INVULN_MS, boostPenalty: 0, boosting: false
+      trail: [], invulnUntil: now() + INVULN_MS, boostPenalty: 0, boosting: false,
+      // FIX min snake size
+      hitbox: Math.max(emojiPx, 32)
     };
     state.players.set(id, p);
     state.sockets.set(socket, id);
@@ -296,10 +298,11 @@ setInterval(()=>{
     p.x += Math.cos(p.dir)*p.spd;
     p.y += Math.sin(p.dir)*p.spd;
 
-    const half = trailWidth(p.score)/2;
-    if (p.x < half || p.y < half || p.x > MAP_SIZE - half || p.y > MAP_SIZE - half){
-      if (t >= p.invulnUntil) die(p);
-      continue;
+    function trailWidth(score){
+      const base = cfg.trailWidthBase ?? 6;
+      const grow = cfg.trailWidthGrowth ?? 0.03;
+      const w = base + Math.floor(score * grow);
+      return Math.max(w, Math.max(emojiPx, 32)); // FIX min snake size (physics only)
     }
 
     p.trail.push({x:p.x, y:p.y, t});

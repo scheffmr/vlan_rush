@@ -98,14 +98,16 @@ function playBeep(freq=440, dur=0.08, type="sine"){
 
 // ---------- sprite cache ----------
 function createEmojiSprite(emoji, size = emojiPx) {
+  const minVis = 32; // Mindestgröße, ab der Color-Emoji sichtbar sind
+  const drawSize = Math.max(size, minVis); // FIX min snake size (render only)
   const c = document.createElement('canvas');
-  c.width = size * 2;
-  c.height = size * 2;
+  c.width = drawSize * 2;
+  c.height = drawSize * 2;
   const ctx2 = c.getContext('2d');
-  ctx2.font = `${size}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"`;
+  ctx2.font = `${drawSize}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"`;
   ctx2.textAlign = 'center';
   ctx2.textBaseline = 'middle';
-  ctx2.fillText(emoji, size, size);
+  ctx2.fillText(emoji, drawSize, drawSize);
   return c;
 }
 function ensureSprite(emoji, size = emojiPx) {
@@ -135,6 +137,7 @@ function applyConfig(cfg){
   if (typeof cfg.segmentPerPoint === 'number') segmentPerPoint = cfg.segmentPerPoint;
   if (typeof cfg.segmentOverlap === 'number') segmentOverlap = cfg.segmentOverlap;
   if (typeof cfg.emojiPx === 'number') emojiPx = cfg.emojiPx;
+  emojiPx = Math.max(emojiPx, 22);
 }
 
 // ---------- messages ----------
@@ -299,72 +302,143 @@ function draw(){
   }
 
   // --- Spieler & Trails ---
+    // --- Spieler & Trails ---
   frameCounter++;
   for (const p of players.values()){
-    if (!p.alive || !p.trail || p.trail.length < 2) continue;
+    if (!p.alive) continue;
 
-    // Kopfposition prüfen – außerhalb? Trail ggf. überspringen
-    if (p.x < vx1 || p.x > vx2 || p.y < vy1 || p.y > vy2) {
-      const last = p.trail[p.trail.length - 1];
-      if (last.x < vx1 || last.x > vx2 || last.y < vy1 || last.y > vy2) continue;
-    }
+    // Sichtbarkeit (Viewport + 15% Rand)
+    const headInView = (p.x > vx1 && p.x < vx2 && p.y > vy1 && p.y < vy2);
 
-    const count = Math.max(0, Math.floor(p.score / segmentPerPoint));
-    if (count <= 0) continue;
-    const overlap = Math.min(0.9, Math.max(0, segmentOverlap));
-    const spacing = (p.hitbox || emojiPx) * (1 - overlap);
-    const segSize = Math.max(p.hitbox || emojiPx, emojiPx);
+    // Basismetriken für Größe — respektiere emojiPx (Config-Mindestgröße)
+    const radiusBase = Math.max(p.hitbox || emojiPx, emojiPx); // FIX min snake size
+    const segSize = radiusBase;                                 // FIX min snake size
 
-    // Trail-Cache verwenden
-    let cache = trailCache.get(p.id);
-    if (!cache) cache = { pts: [], lastFrame: 0 };
-    const shouldRecalc = (frameCounter - cache.lastFrame) > 3;
-    let pts;
+    // -------- Trail nur zeichnen, wenn vorhanden --------
+    const hasTrail = p.trail && p.trail.length >= 2;
+    if (hasTrail) {
+      // Kopfposition prüfen – wenn Kopf UND letztes Trailende komplett außerhalb liegen, Trail überspringen
+      const lastSeg = p.trail[p.trail.length - 1];
+      if (!headInView) {
+        if (lastSeg.x < vx1 || lastSeg.x > vx2 || lastSeg.y < vy1 || lastSeg.y > vy2) {
+          // kein Trail zeichnen, aber Kopf kann unten trotzdem gezeichnet werden
+        } else {
+          // Trail zeichnen
+          const count = Math.max(0, Math.floor(p.score / segmentPerPoint));
+          if (count > 0) {
+            const overlap = Math.min(0.9, Math.max(0, segmentOverlap));
+            const spacing = radiusBase * (1 - overlap); // FIX min snake size
+            const EPS = 1e-4; // verhindert, dass ein Trail-Punkt exakt auf der Kopf-Position liegt
 
-    if (shouldRecalc) {
-      pts = [];
-      let need = spacing;
-      for (let i = p.trail.length - 1; i > 0 && pts.length < count; i--) {
-        const a = p.trail[i], b = p.trail[i - 1];
-        const dx = a.x - b.x, dy = a.y - b.y;
-        const segLen = Math.hypot(dx, dy); if (segLen <= 0) continue;
-        while (need <= segLen && pts.length < count) {
-          const t = 1 - (need / segLen);
-          const x = a.x + (b.x - a.x) * t;
-          const y = a.y + (b.y - a.y) * t;
-          const dir = Math.atan2(a.y - b.y, a.x - b.x);
-          if (x > vx1 && x < vx2 && y > vy1 && y < vy2)
-            pts.push({ x, y, dir });
-          need += spacing;
+            // Trail-Cache verwenden
+            let cache = trailCache.get(p.id);
+            if (!cache) cache = { pts: [], lastFrame: 0 };
+            const shouldRecalc = (frameCounter - cache.lastFrame) > 3;
+            let pts;
+
+            if (shouldRecalc) {
+              pts = [];
+              let need = spacing;
+              for (let i = p.trail.length - 1; i > 0 && pts.length < count; i--) {
+                const a = p.trail[i], b = p.trail[i - 1];
+                const dx = a.x - b.x, dy = a.y - b.y;
+                const segLen = Math.hypot(dx, dy); if (segLen <= 0) continue;
+                while (need < segLen - EPS && pts.length < count) { // <— strikt unter segLen
+                  const t = 1 - (need / segLen);
+                  const x = a.x + (b.x - a.x) * t;
+                  const y = a.y + (b.y - a.y) * t;
+                  const dir = Math.atan2(a.y - b.y, a.x - b.x);
+                  pts.push({ x, y, dir });
+                  need += spacing;
+                }
+                need -= segLen;
+              }
+              cache.pts = pts;
+              cache.lastFrame = frameCounter;
+            } else {
+              pts = cache.pts.slice();
+            }
+            trailCache.set(p.id, cache);
+
+            const sprite = ensureSprite(p.avatar, segSize);
+            ctx.globalAlpha = 1.0;
+            const pxMargin = 0.15 * Math.max(w, h); // 15% Rand in Pixeln
+            for (let i = pts.length - 1; i >= 0; i--) {
+              const s = pts[i];
+              if (s.x < vx1 - pxMargin || s.x > vx2 + pxMargin || s.y < vy1 - pxMargin || s.y > vy2 + pxMargin) continue;
+              const sx = s.x - cam.x, sy = s.y - cam.y;
+              ctx.save();
+              ctx.translate(sx, sy);
+              ctx.rotate(s.dir);
+              ctx.drawImage(sprite, -segSize / 2, -segSize / 2, segSize, segSize);
+              ctx.restore();
+            }
+          }
         }
-        need -= segLen;
-      }
-      cache.pts = pts;
-      cache.lastFrame = frameCounter;
-    } else {
-      pts = cache.pts.slice();
-      if (pts.length > 0) {
-        const head = p.trail[p.trail.length - 1];
-        pts[0].x = head.x; pts[0].y = head.y;
+      } else {
+        // Kopf im View: Trail zeichnen (wie im anderen Zweig)
+        const count = Math.max(0, Math.floor(p.score / segmentPerPoint));
+        if (count > 0) {
+          const overlap = Math.min(0.9, Math.max(0, segmentOverlap));
+          const spacing = radiusBase * (1 - overlap); // FIX min snake size
+          const EPS = 1e-4; // kein Punkt exakt auf Kopf-Position
+
+          let cache = trailCache.get(p.id);
+          if (!cache) cache = { pts: [], lastFrame: 0 };
+          const shouldRecalc = (frameCounter - cache.lastFrame) > 3;
+          let pts;
+
+          if (shouldRecalc) {
+            pts = [];
+            let need = spacing;
+            for (let i = p.trail.length - 1; i > 0 && pts.length < count; i--) {
+              const a = p.trail[i], b = p.trail[i - 1];
+              const dx = a.x - b.x, dy = a.y - b.y;
+              const segLen = Math.hypot(dx, dy); if (segLen <= 0) continue;
+
+              // WICHTIG: nie t=0 erzeugen (dann wäre Punkt auf 'a' = Kopfsegment)
+              while (need < segLen - EPS && pts.length < count) {
+                const t = 1 - (need / segLen);
+                const x = a.x + (b.x - a.x) * t;
+                const y = a.y + (b.y - a.y) * t;
+                const dir = Math.atan2(a.y - b.y, a.x - b.x);
+                // KEIN CULLING HIER – erst beim Zeichnen
+                pts.push({ x, y, dir });
+                need += spacing;
+              }
+              need -= segLen;
+            }
+            cache.pts = pts;
+            cache.lastFrame = frameCounter;
+          } else {
+            pts = cache.pts.slice();
+          }
+          trailCache.set(p.id, cache);
+
+          const sprite = ensureSprite(p.avatar, segSize);
+
+          // Alpha zurücksetzen + einheitliches Culling beim Zeichnen
+          ctx.globalAlpha = 1.0;
+          const pxMargin = 0.15 * Math.max(w, h); // 15% Rand in Pixeln
+          for (let i = pts.length - 1; i >= 0; i--) { // NICHTS überspringen
+            const s = pts[i];
+            if (s.x < vx1 - pxMargin || s.x > vx2 + pxMargin || s.y < vy1 - pxMargin || s.y > vy2 + pxMargin) continue;
+
+            const sx = s.x - cam.x, sy = s.y - cam.y;
+            ctx.save();
+            ctx.translate(sx, sy);
+            ctx.rotate(s.dir);
+            ctx.drawImage(sprite, -segSize / 2, -segSize / 2, segSize, segSize);
+            ctx.restore();
+          }
+        }
       }
     }
-    trailCache.set(p.id, cache);
 
-    const sprite = ensureSprite(p.avatar, segSize);
-    for (let i = pts.length - 1; i >= 0; i--) {
-      const s = pts[i];
-      const sx = s.x - cam.x, sy = s.y - cam.y;
-      ctx.save();
-      ctx.translate(sx, sy);
-      ctx.rotate(s.dir);
-      ctx.drawImage(sprite, -segSize / 2, -segSize / 2, segSize, segSize);
-      ctx.restore();
-    }
-
-    // Kopf
-    if (p.x > vx1 && p.x < vx2 && p.y > vy1 && p.y < vy2) {
+    // -------- Kopf IMMER zeichnen (auch ohne Trail) --------
+    if (headInView) {
       let dir = 0;
-      if (p.trail.length >= 2){
+      if (hasTrail){
         const a=p.trail[p.trail.length-1], b=p.trail[p.trail.length-2];
         dir = Math.atan2(a.y-b.y, a.x-b.x);
       }
@@ -374,7 +448,7 @@ function draw(){
       ctx.rotate(dir);
       if (p.boosting){ ctx.shadowColor="rgba(255,50,50,0.9)"; ctx.shadowBlur=20; }
       const spriteHead = ensureSprite(p.avatar, segSize);
-      ctx.drawImage(spriteHead, -segSize/2, -segSize/2, segSize, segSize);
+      ctx.drawImage(spriteHead, -segSize/2, -segSize/2, segSize, segSize); // FIX min snake size
       ctx.restore();
 
       ctx.font = '12px system-ui';
@@ -384,6 +458,7 @@ function draw(){
     }
   }
 
+  // --- Scoreboard ---
   renderScoreboard();
 }
 
