@@ -97,19 +97,69 @@ function playBeep(freq=440, dur=0.08, type="sine"){
 }
 
 // ---------- sprite cache ----------
-function createEmojiSprite(emoji, size = emojiPx) {
-  const minVis = 32; // Mindestgröße, ab der Color-Emoji sichtbar sind
-  const drawSize = Math.max(size, minVis); // FIX min snake size (render only)
-  const c = document.createElement('canvas');
-  c.width = drawSize * 2;
-  c.height = drawSize * 2;
-  const ctx2 = c.getContext('2d');
-  ctx2.font = `${drawSize}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"`;
-  ctx2.textAlign = 'center';
-  ctx2.textBaseline = 'middle';
-  ctx2.fillText(emoji, drawSize, drawSize);
-  return c;
-}
+ function createEmojiSprite(emoji, size = emojiPx) {
+  // 1) Groß auf temporäres Canvas zeichnen, damit wir eng croppen können
+  const minVis = 32;
+  const drawSize = Math.max(size, minVis);
+  const tmp = document.createElement('canvas');
+  // großzügig > genug Platz für alle Emojis/Fonts
+  tmp.width = drawSize * 3;
+  tmp.height = drawSize * 3;
+  const tctx = tmp.getContext('2d');
+  tctx.textAlign = 'center';
+  tctx.textBaseline = 'middle';
+  tctx.font = `${drawSize}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"`;
+  // mittig setzen
+  const cx = tmp.width / 2, cy = tmp.height / 2;
+  tctx.fillText(emoji, cx, cy);
+
+  // 2) Alpha-Bounds finden (engster umschließender Rahmen)
+  const img = tctx.getImageData(0, 0, tmp.width, tmp.height);
+  const data = img.data;
+  let minX = tmp.width, minY = tmp.height, maxX = 0, maxY = 0;
+  for (let y = 0; y < tmp.height; y++) {
+    for (let x = 0; x < tmp.width; x++) {
+      const a = data[(y * tmp.width + x) * 4 + 3];
+      if (a > 0) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  // Falls das Emoji extrem klein wäre (sollte nicht vorkommen), fallback
+  if (maxX <= minX || maxY <= minY) {
+    return tmp;
+  }
+  
+  // 3) Quadratisch croppen + kleines Padding für saubere Ränder
+  const pad = Math.ceil(drawSize * 0.06); // ~6% Rand
+  let boxW = (maxX - minX + 1) + pad * 2;
+  let boxH = (maxY - minY + 1) + pad * 2;
+  const box = Math.max(boxW, boxH); // quadratisch, damit Rotation sauber bleibt
+
+  const out = document.createElement('canvas');
+  out.width = box;
+  out.height = box;
+  const octx = out.getContext('2d');
+  // Zielzentrum
+  const ox = out.width / 2;
+  const oy = out.height / 2;
+  // Quelle: gecroppter Bereich
+  const srcW = maxX - minX + 1;
+  const srcH = maxY - minY + 1;
+  // Quelle mittig in Ziel legen, dabei leicht herunterskalieren/hochskalieren, sodass die kurze Seite in den Box-Quadrat passt
+  const scale = Math.min((box - 2 * pad) / srcW, (box - 2 * pad) / srcH);
+  const dstW = Math.round(srcW * scale);
+  const dstH = Math.round(srcH * scale);
+  octx.drawImage(
+    tmp,
+    minX, minY, srcW, srcH,
+    Math.round(ox - dstW / 2), Math.round(oy - dstH / 2), dstW, dstH
+  );
+  return out;
+ }
 function ensureSprite(emoji, size = emojiPx) {
   const key = `${emoji}_${size}`;
   if (!emojiSprites.has(key)) {
@@ -380,7 +430,7 @@ function draw(){
         const count = Math.max(0, Math.floor(p.score / segmentPerPoint));
         if (count > 0) {
           const overlap = Math.min(0.9, Math.max(0, segmentOverlap));
-          const spacing = radiusBase * (1 - overlap); // FIX min snake size
+          const spacing = emojiPx * (1 - overlap); // spacing strikt an emojiPx koppeln (entspricht Server / Config)
           const EPS = 1e-4; // kein Punkt exakt auf Kopf-Position
 
           let cache = trailCache.get(p.id);

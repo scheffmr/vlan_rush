@@ -69,10 +69,10 @@ function makeConfigPacket(){
 
 // ---------- State ----------
 const state = { players: new Map(), sockets: new Map(), orbs: [] };
-const EMOJIS = ['🐱','🐶','🐭','🐹','🐰','🐻','🐼','🐸','🦊',
-  '🐯','🐨','🐷','🐮','🐔','🐤','🐧','🦉','🐙',
-  '💻','📦','🧠','💡','🧩','🛰️',
-  '😎','🤖','👾','🧑','🎮','🧱','⚙️'];
+const EMOJIS = ['😎','🤖','💡','🍩','🍪','🎈','🌀','🔮','💎','🧠','🦠','🌈',
+  '🎯','⚽','🟣','🟢','🔵','🟠','🔴','🟡','🟤',
+  '🥎','🏀','🏐','🥏'
+];
 
 function spawnOrbs(n){
   for(let i=0;i<n;i++){
@@ -336,8 +336,8 @@ setInterval(()=>{
       const segCount = Math.max(0, Math.floor(b.score / per));
       if (segCount <= 0) continue;
 
-      const overlap = Math.min(0.9, Math.max(0, cfg.segmentOverlap ?? 0.25));
-      const spacing = trailWidth(b.score)  * (1 - overlap) || (emojiPx * (1 - overlap));
+      const overlap = Math.min(0.9, Math.max(0, cfg.segmentOverlap ?? 0.25)); 
+      const spacing = (emojiPx) * (1 - overlap); // spacing ausschließlich aus Emoji-Grundgröße ableiten
       const radius = trailWidth(b.score)  * 0.5;
       const r2 = (radius + radius) * (radius + radius);
 
