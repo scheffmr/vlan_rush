@@ -14,6 +14,10 @@ const players = new Map();
 let orbs = [];
 let pulse = 0;
 
+// ---------- scoreboard ----------
+let lastScoreRender = 0;
+let lastScoreHTML = '';
+
 // ---------- audio ----------
 let audioCtx;
 function playBeep(freq=440, dur=0.08, type="sine"){
@@ -242,14 +246,35 @@ function draw(){
 }
 
 // ---------- scoreboard ----------
-function renderScoreboard(){
+function renderScoreboard() {
   if (!sb) return;
-  const list = Array.from(players.values()).filter(p=>p.alive).sort((a,b)=> b.score - a.score).slice(0,10);
-  if (!list.length){
-    sb.innerHTML = `<div class="score-title">Punkte</div><div class="score-empty">Noch keine Spieler aktiv</div>`;
-    return;
+  const now = performance.now();
+
+  // nur alle 500ms aktualisieren
+  if (now - lastScoreRender < 500) {
+    return; // innerhalb des Intervalls – kein Update nötig
   }
-  const rows = list.map((p,idx)=> `<div class="scoreitem"><span class="name">${idx+1}. ${esc(p.name)}</span><span class="points">${Math.floor(p.score)}</span></div>`).join('');
-  sb.innerHTML = `<div class="score-title">Punkte</div>${rows}`;
+  lastScoreRender = now;
+
+  const list = Array.from(players.values())
+    .filter(p => p.alive)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10);
+
+  let html;
+  if (!list.length) {
+    html = `<div class="score-title">Punkte</div><div class="score-empty">Noch keine Spieler aktiv</div>`;
+  } else {
+    const rows = list.map((p, idx) =>
+      `<div class="scoreitem"><span class="name">${idx + 1}. ${esc(p.name)}</span><span class="points">${Math.floor(p.score)}</span></div>`
+    ).join('');
+    html = `<div class="score-title">Punkte</div>${rows}`;
+  }
+
+  // Nur neu schreiben, wenn sich der Inhalt tatsächlich geändert hat
+  if (html !== lastScoreHTML) {
+    sb.innerHTML = html;
+    lastScoreHTML = html;
+  }
 }
 function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
